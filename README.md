@@ -343,6 +343,7 @@ compañeros → vaciar la lista.
 | `POLL_INTERVAL_SECONDS` | `30` | Cada cuánto se consulta GLPI |
 | `POLL_OVERLAP_SECONDS` | `60` | Solape del cursor, para absorber desfases de reloj |
 | `MAX_CATCHUP_HOURS` | `0` | Si el puente ha estado parado más de esto, no recupera lo acumulado. `0` = sin límite |
+| `SWEEP_INTERVAL_MINUTES` | `10` | Cada cuánto se repasan las conversaciones abiertas para detectar tickets eliminados en GLPI. `0` = desactivado |
 | `ALLOWED_REQUESTER_EMAILS` | vacío | Lista blanca de solicitantes. Vacío = todos |
 | `DRY_RUN` | `false` | Solo registra en el log lo que haría |
 | `ONLY_TICKETS_CREATED_AFTER_ACTIVATION` | `false` | `true` ignora los tickets anteriores a la activación aunque tengan actividad nueva |
@@ -356,19 +357,56 @@ compañeros → vaciar la lista.
 
 ## 8. Despliegue en un servidor
 
-No hace falta abrir ningún puerto: con Socket Mode el puente solo abre conexiones **salientes**.
+No hace falta abrir ningún puerto: con Socket Mode el puente solo abre conexiones **salientes**
+hacia Slack y hacia GLPI. Puede vivir detrás de cualquier cortafuegos.
+
+### En Ubuntu, de cero
 
 ```bash
-docker compose up -d --build
+# 1. Docker, si no está
+sudo apt update && sudo apt install -y docker.io docker-compose-v2
+sudo usermod -aG docker "$USER" && newgrp docker
+
+# 2. El proyecto
+git clone https://github.com/PauAguilarYerves/GLPI-Slack.git /opt/glpi-slack-bridge
+cd /opt/glpi-slack-bridge
+
+# 3. Configuración
+cp .env.example .env
+chmod 600 .env
+nano .env                          # GLPI_URL, GLPI_BRIDGE_USER_ID, GLPI_PROFILE_ID
+./set-secret.sh GLPI_APP_TOKEN     # y los otros tres secretos
+./set-secret.sh GLPI_USER_TOKEN
+./set-secret.sh SLACK_BOT_TOKEN
+./set-secret.sh SLACK_APP_TOKEN
+
+# 4. Verificar antes de arrancar (no escribe nada)
+docker compose run --rm glpi-slack-bridge node src/tools/preflight.js
+
+# 5. Arrancar
+docker compose up -d
+docker compose logs -f
 ```
 
 El `.env` no entra en la imagen (está en `.dockerignore`); lo lee el contenedor en arranque.
+El proyecto se llama siempre `glpi-slack-bridge` aunque la carpeta tenga otro nombre, así que
+el volumen de datos es `glpi-slack-bridge_bridge-data`.
 
 **Antes de arrancar en el servidor:**
 
-1. **Llévate `data/bridge.sqlite`** de la máquina anterior. Ahí viven el cursor y el mapa
-   ticket ⇄ canal. Si arrancas de cero no se reenvía nada antiguo, pero las conversaciones
-   abiertas quedan huérfanas: sus canales ya no se limpiarían y se crearían duplicados.
+1. **Llévate `data/bridge.sqlite`** de la máquina donde estuviera corriendo. Ahí viven el
+   cursor y el mapa ticket ⇄ canal, y **no está en el repositorio** (`data/` va en
+   `.gitignore`). Si arrancas de cero no se reenvía nada antiguo —eso sigue garantizado— pero
+   las conversaciones abiertas quedan huérfanas: sus canales ya no se limpiarían al cerrarse
+   el ticket y se crearían duplicados.
+
+   Desde la máquina antigua:
+
+   ```bash
+   scp data/bridge.sqlite usuario@servidor:/opt/glpi-slack-bridge/data/
+   ```
+
+   Y en el servidor, metiéndolo en el volumen:
 
    ```bash
    docker compose up -d && docker compose stop
@@ -376,6 +414,9 @@ El `.env` no entra en la imagen (está en `.dockerignore`); lo lee el contenedor
      cp /src/bridge.sqlite /d/bridge.sqlite
    docker compose start
    ```
+
+   Si arrancas limpio, cierra antes los canales que tengas abiertos en Slack, o quedarán
+   sueltos para siempre.
 
 2. **Cuadra la zona horaria** con la del servidor de GLPI (`TZ` en el compose). La API de GLPI
    devuelve fechas sin offset; si los relojes no coinciden, el cursor se desajusta.

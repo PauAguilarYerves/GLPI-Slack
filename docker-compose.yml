@@ -1,3 +1,7 @@
+# Nombre fijo del proyecto: asi el volumen se llama siempre
+# glpi-slack-bridge_bridge-data, sin depender de como se llame la carpeta.
+name: glpi-slack-bridge
+
 services:
   glpi-slack-bridge:
     build: .

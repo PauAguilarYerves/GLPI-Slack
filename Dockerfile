@@ -3,7 +3,13 @@ FROM node:24-bookworm-slim
 # Zona horaria: DEBE coincidir con la del servidor de GLPI. La API devuelve
 # fechas sin offset, y si los relojes no cuadran el cursor se desajusta.
 ENV TZ=Europe/Madrid
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+# La imagen slim no trae tzdata: sin esto /usr/share/zoneinfo no existe y el
+# enlace queda roto.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+ && echo $TZ > /etc/timezone
 
 WORKDIR /app
 COPY package.json package-lock.json ./
