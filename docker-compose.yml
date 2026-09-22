@@ -2,7 +2,6 @@ services:
   glpi-slack-bridge:
     build: .
     image: glpi-slack-bridge:latest
-    container_name: glpi-slack-bridge
     restart: unless-stopped
 
     # Todos los secretos y la configuracion salen del .env del host.

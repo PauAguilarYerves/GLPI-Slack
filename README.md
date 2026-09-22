@@ -1,19 +1,12 @@
 # Puente GLPI ⇄ Slack
 
-Middleware que lleva las respuestas de los técnicos de GLPI a Slack, devuelve a GLPI lo que
-el usuario conteste en Slack, y **hace desaparecer la conversación del cliente del usuario**
-cuando el ticket se resuelve.
-
-**Regla de oro:** en el primer arranque el cursor se fija en ese instante. Nada anterior
-—ni tickets históricos ni el historial de los tickets abiertos— se procesa jamás.
-
----
-
-## 1. Arquitectura
+Los usuarios no leen los correos de GLPI. Este puente lleva cada respuesta del técnico a un
+canal privado de Slack, devuelve a GLPI lo que el usuario conteste allí, y hace desaparecer
+la conversación cuando el ticket se resuelve.
 
 ```
                   ┌──────────────────────────┐
-   sondeo 30 s    │                          │  Socket Mode (WSS saliente)
+   sondeo 30 s    │                          │  Socket Mode (WebSocket saliente)
  ┌───────────────►│   glpi-slack-bridge      │◄──────────────────────────┐
  │  REST apirest  │   (Node.js + SQLite)     │   Slack Events API        │
  │                │                          │                           │
@@ -24,332 +17,506 @@ cuando el ticket se resuelve.
                   └──────────────────────────┘
 ```
 
-### Por qué sondeo (polling) y no webhooks
+**Qué hace, en concreto:**
 
-Los webhooks salientes **nativos** llegan con **GLPI 11** (Administración → Configuración →
-Webhooks: itemtype, evento, URL, secreto compartido y payload con `{{variables}}`). En
-**GLPI 10 y anteriores no existen en el core**: harían falta plugins de terceros o un cron
-propio. Además, un webhook requiere exponer un endpoint HTTP alcanzable desde el servidor GLPI,
-algo que en instalaciones on-premise suele chocar con la red corporativa.
+| Evento en GLPI | Qué ocurre en Slack |
+|---|---|
+| Se crea un ticket | Se abre un canal privado con el solicitante y se publica su solicitud |
+| El técnico añade un seguimiento | Llega al canal, con sus adjuntos |
+| El técnico edita un seguimiento | Se reescribe el mensaje, marcado como editado |
+| El ticket se resuelve o cierra | Se publica la solución y el canal desaparece del Slack del usuario |
 
-El sondeo de la API REST:
+| Evento en Slack | Qué ocurre en GLPI |
+|---|---|
+| El usuario escribe en el canal | Se añade como seguimiento del ticket |
+| El usuario edita su mensaje | Se reescribe ese seguimiento |
+| El usuario sube un archivo | Se adjunta al ticket como documento |
+| El usuario escribe tras el cierre | El ticket se reabre y se avisa al técnico por mensaje directo |
 
-- funciona en **cualquier versión de GLPI** con la API activada,
-- no necesita plugins ni abrir puertos entrantes,
-- y hace trivial el requisito crítico: **el cursor es el interruptor de activación**.
+**Regla de oro:** en el primer arranque el cursor se fija en ese instante. Nada anterior —ni
+tickets históricos ni el historial de los que están abiertos— se procesa jamás.
 
-Si estás en GLPI 11 y prefieres webhooks, el diseño no cambia: sustituye `src/poller.js` por un
-endpoint HTTP que valide la firma SHA-256 del secreto y llame a las mismas funciones
-(`handleNewFollowups`, `handleClosure`). Mantén de todos modos el sondeo como red de seguridad:
-un webhook perdido es un mensaje que el usuario nunca recibe.
+---
 
-### Por qué Socket Mode
+## 0. Arranque rápido
 
-Slack necesita alcanzar tu bot para entregarte los eventos. Con **Socket Mode** la conexión la
-abre el bridge hacia Slack (WebSocket saliente): cero puertos abiertos, cero certificados, cero
-túneles. Si prefieres Request URL clásica, borra `SLACK_APP_TOKEN` del `.env`, pon
-`SLACK_SIGNING_SECRET` y publica el puerto 3000 detrás de tu reverse proxy.
+Dos formas de levantarlo, equivalentes. Elige una.
 
-### Canal privado por ticket vs Mensaje Directo
+**En local** (Node ≥ 22.5):
 
-| | DM | **Canal privado por ticket (recomendado)** |
+```bash
+npm install
+cp .env.example .env
+./set-secret.sh GLPI_APP_TOKEN     # y los otros tres secretos
+npm run check                      # verifica todo sin escribir nada
+npm start
+```
+
+**En Docker** (no necesita Node instalado):
+
+```bash
+cp .env.example .env
+./set-secret.sh GLPI_APP_TOKEN     # y los otros tres secretos
+docker compose run --rm glpi-slack-bridge node src/tools/preflight.js
+docker compose up -d
+```
+
+En los dos casos hay que rellenar antes el `.env`: las **secciones 2, 3 y 4** explican de dónde
+sale cada valor. Sin credenciales válidas, `npm run check` te dirá exactamente qué falta.
+
+---
+
+## 1. Requisitos
+
+- **Node.js ≥ 22.5** (usa el módulo `node:sqlite` integrado: cero dependencias nativas que
+  compilar). En Node 22 hay que añadir `--experimental-sqlite`; en Node 24 no hace falta.
+  Como alternativa, Docker.
+- **GLPI 9.5 o superior** con la API REST activable, y permiso para crear un usuario de
+  servicio con perfil de técnico.
+- **Slack**: permiso para crear e instalar una app en el workspace. No hace falta ser
+  administrador salvo que el workspace restrinja la instalación de apps.
+- **Red**: el puente necesita salida hacia GLPI y hacia Slack. **No hace falta abrir ningún
+  puerto entrante**, ni exponer nada a internet, ni certificados.
+
+---
+
+## 2. Credenciales necesarias
+
+Son **seis valores obligatorios**. Cuatro son secretos y dos son números que se leen de la
+interfaz de GLPI.
+
+| Variable | Qué es | Dónde se obtiene | Formato |
+|---|---|---|---|
+| `GLPI_URL` | Raíz de la API REST | GLPI → Configurar → General → API | `https://tu-glpi/apirest.php` |
+| `GLPI_APP_TOKEN` 🔒 | Token del cliente API | Misma pantalla → *Añadir cliente API* | 40 alfanuméricos |
+| `GLPI_USER_TOKEN` 🔒 | Token del usuario de servicio | Ficha del usuario → *Token de API* | 40 alfanuméricos |
+| `GLPI_BRIDGE_USER_ID` | `users_id` del usuario de servicio | URL de su ficha: `user.form.php?id=**896**` | número |
+| `GLPI_PROFILE_ID` | Perfil con el que trabaja la sesión | Administración → Perfiles → URL del perfil Técnico | número |
+| `SLACK_BOT_TOKEN` 🔒 | Token del bot | Slack app → OAuth & Permissions | `xoxb-…` |
+| `SLACK_APP_TOKEN` 🔒 | Token de Socket Mode | Slack app → Basic Information → App-Level Tokens | `xapp-…` |
+
+Opcionales:
+
+| Variable | Para qué | Cuándo hace falta |
 |---|---|---|
-| Aislar conversaciones | Solo por hilos | Total, un canal por ticket |
-| Borrar mensajes del bot | Sí (`chat.delete`) | Sí |
-| Borrar mensajes del usuario | **No**, quedan para siempre | No, pero se le retira el acceso |
-| Que desaparezca del cliente del usuario | **Imposible** | **Sí** |
-| Añadir al técnico | No | Sí |
+| `SLACK_SIGNING_SECRET` | Verificar peticiones HTTP | Solo si desactivas Socket Mode |
+| `SLACK_ADMIN_TOKEN` 🔒 | Borrar canales de verdad | Solo en Enterprise Grid |
 
-### Cómo se consigue que el ticket desaparezca del usuario
-
-Dos límites duros de la API de Slack, para que no haya sorpresas:
-
-1. **Un bot solo puede borrar sus propios mensajes.** `chat.delete` con un token de bot no
-   toca lo que ha escrito una persona. Borrarlo requeriría un token *de usuario* de cada
-   empleado (que tendría que autorizar la app individualmente) o Enterprise Grid.
-2. **Un bot no puede borrar un canal.** Solo `admin.conversations.delete`, que exige
-   Enterprise Grid y un token de organización.
-
-Y una tercera cosa que suele pillar por sorpresa: **archivar no oculta nada**. Un canal
-archivado sigue apareciéndole a quien fue miembro en *Canales → Archivados*, y sus mensajes
-siguen saliendo en la búsqueda.
-
-La salida es no intentar borrar lo que no se puede borrar, sino **quitar el acceso**:
-
-> **`CLEANUP_MODE=purge` (por defecto)** — al cerrarse el ticket:
-> 1. `chat.delete` de todos los mensajes del bot;
-> 2. `conversations.kick` de todos los miembros humanos;
-> 3. `conversations.archive` del canal.
+> **Los secretos nunca se escriben a mano en un fichero ni se pegan en un chat.** Usa el script
+> incluido, que los pide a ciegas y no deja rastro en el historial del shell:
 >
-> Un canal privado del que no eres miembro **no existe para ti**: no está en la barra
-> lateral, no está en "canales archivados", no aparece en la búsqueda y no se puede abrir
-> por URL. Para el usuario, el ticket y la conversación se han esfumado.
-
-El orden importa: en un canal ya archivado no se puede expulsar a nadie, así que el `kick`
-va antes del `archive`. La prueba `npm test` lo verifica explícitamente.
-
-#### Si quieres que además no quede nada *dentro* del canal
-
-Con `purge` el usuario no ve nada, pero sus mensajes siguen existiendo en el canal (un
-administrador del workspace podría llegar a ellos, y saldrían en una exportación de datos).
-Si necesitas que no quede ni eso, **`REPLY_MODE=modal`**: el mensaje del bot lleva un botón
-*Responder* que abre una ventana emergente; el texto viaja directo a GLPI sin publicarse
-nunca en Slack. Los avisos de confirmación se envían como mensajes efímeros, que tampoco se
-almacenan. Resultado: **todo lo que hay en el canal lo ha escrito el bot, y el bot lo borra
-entero**. El coste es un clic extra antes de escribir.
-
-| Lo que quieres | Configuración |
-|---|---|
-| El usuario no vuelve a ver el ticket | `CLEANUP_MODE=purge` (por defecto) |
-| Además, el canal queda literalmente vacío | `CLEANUP_MODE=purge` + `REPLY_MODE=modal` |
-| Borrado real del canal (Enterprise Grid) | `CLEANUP_MODE=delete` + `SLACK_ADMIN_TOKEN` |
-
-Un detalle de permisos: si `conversations.kick` devuelve `restricted_action`, tu workspace
-limita quién puede retirar miembros de canales privados. Se ajusta en *Settings &
-administration → Workspace settings → Permissions*. El bridge lo registra como error
-explícito en el log en lugar de fallar en silencio.
-
-## 2. Gestión de estado
-
-Todo vive en SQLite (`data/bridge.sqlite`), tres piezas:
-
-> Con `CLEANUP_DELAY_MINUTES=0` el mensaje de resolución se publica y se borra en la misma
-> pasada: el usuario apenas lo verá. Si quieres que lea la solución antes de que desaparezca
-> todo, pon 60. El canal desaparece igual, solo que una hora después.
-
-| Tabla | Para qué |
-|---|---|
-| `kv` | `cursor` (última marca temporal sondeada) y `activated_at` (momento de activación, inmutable) |
-| `conversations` | **El vínculo**: `ticket_id` ⇄ `channel_id`, más `slack_user_id`, `root_ts`, `cleanup_at`, `cleaned_at` |
-| `bot_messages` | `(channel_id, ts)` de cada mensaje publicado, para poder borrarlos al cerrar |
-| `seen_followups` | Idempotencia y anti-bucle |
-
-**El vínculo va en los dos sentidos y con índice único**: `ticket_id` es clave primaria y
-`channel_id` tiene índice único. Slack te entrega un evento con `channel`, buscas por
-`channel_id` y sabes a qué ticket escribir; GLPI te da un `ticket_id`, buscas por él y sabes
-dónde publicar. No hace falta parsear el nombre del canal ni meter metadatos en los mensajes.
-
-### Anti-bucle (el fallo clásico de estas integraciones)
-
-Sin esto, cada respuesta escrita en GLPI desde Slack vuelve a Slack, que la reescribe en GLPI…
-Tres defensas, en capas:
-
-1. Al crear un seguimiento desde Slack, GLPI devuelve su `id` → se inserta en `seen_followups`
-   con origen `slack`. El sondeo nunca lo reenviará.
-2. Se descarta todo seguimiento cuyo `users_id` sea `GLPI_BRIDGE_USER_ID` (la cuenta de servicio).
-3. En Slack se ignora cualquier evento con `bot_id` o `subtype`.
-
-### El cursor
-
-- Primer arranque: `cursor = activated_at = now()`. **Nada retroactivo.**
-- Cada pasada avanza el cursor a `inicio_de_la_pasada − POLL_OVERLAP_SECONDS` (60 s por defecto)
-  para absorber desfases de reloj entre el bridge y GLPI. Los duplicados que genere ese solape
-  los filtra `seen_followups`.
-- Si el bridge ha estado caído y **no** quieres recuperar lo acumulado: `npm run cursor:reset`.
-- Ejecuta el bridge en la **misma zona horaria que el servidor GLPI** (variable `TZ`): la API
-  devuelve fechas sin offset.
+> ```bash
+> ./set-secret.sh GLPI_APP_TOKEN
+> ```
 
 ---
 
-## 3. Configuración de GLPI
+## 3. Configurar GLPI
 
-1. **Activar la API**: Configurar → General → API.
-   - *Habilitar la API REST* → Sí.
-   - *Habilitar el login con credenciales / con token externo* → Sí (token externo).
-   - Anota la **URL de la API**: `https://tu-glpi/apirest.php`.
-2. **Cliente API**: en la misma pantalla, *Añadir cliente API*. Nombre `Slack Bridge`,
-   activo, rango de IPs = la del servidor del bridge (recomendado). Guarda el **App-Token**.
-3. **Cuenta de servicio**: crea un usuario GLPI, p. ej. `slack-bridge`, con un perfil que
-   permita: leer tickets de las entidades implicadas, **añadir seguimientos**, y leer usuarios.
-   Asígnale las entidades con herencia recursiva.
-4. En la ficha de ese usuario → pestaña principal → **Token de API (user_token)**: genera y copia.
-5. Anota su `users_id` (está en la URL de su ficha: `user.form.php?id=**42**`) → `GLPI_BRIDGE_USER_ID`.
-6. **Comprueba los IDs de búsqueda** de tu instalación (deberían ser 2/12/19, pero verifícalo):
+### 3.1 Activar la API
+
+**Configurar → General → pestaña API**
+
+- *Habilitar la API REST* → **Sí**
+- *Habilitar el login con token externo* → **Sí** ← se olvida a menudo, y sin esto no hay sesión
+- Anota la **URL de la API REST** → es tu `GLPI_URL`
+
+### 3.2 Crear el cliente API
+
+En la misma pantalla, abajo, **+ Añadir** un cliente API:
+
+- **Nombre**: `Slack Bridge`
+- **Activo**: Sí
+- **Rango de IPv4**: la IP del servidor donde correrá el puente (recomendado)
+- **Token de aplicación**: marca la casilla **Regenerar** ← si no la marcas, el campo se
+  queda vacío al guardar
+
+Guarda, vuelve a abrir el cliente y ahí aparece el token → `GLPI_APP_TOKEN`.
+
+### 3.3 Crear la cuenta de servicio
+
+**Administración → Usuarios → + Añadir**
+
+- **Login**: `slack-bridge`
+- **Activo**: Sí
+
+Después, en su ficha:
+
+1. Pestaña **Autorizaciones**: asígnale el perfil **Técnico** (o un clon recortado) sobre la
+   entidad que corresponda, marcando **Recursivo** si hay subentidades.
+2. Pestaña principal → campo **Token de API** → marca **Regenerar** y guarda. Al recargar
+   aparece el token → `GLPI_USER_TOKEN`.
+3. La URL de la ficha contiene el id: `user.form.php?id=896` → `GLPI_BRIDGE_USER_ID=896`.
+
+> **El perfil tiene que ver *todos* los tickets, no solo los suyos.** Si la cuenta se queda con
+> el perfil **Self-Service**, la API devuelve **cero tickets** y el puente no envía nada sin dar
+> ningún error. Es el fallo más común de esta instalación.
+
+### 3.4 Fijar el perfil
+
+Una cuenta puede tener varios perfiles, y GLPI abre la sesión con el predeterminado —que suele
+ser Self-Service—. Para no depender de eso, el puente lo fija explícitamente:
+
+**Administración → Perfiles → Técnico** → el id está en la URL → `GLPI_PROFILE_ID`.
+
+### 3.5 Permisos del directorio de documentos
+
+Para que los adjuntos que llegan desde Slack se guarden, el directorio de datos de GLPI debe
+ser escribible por el usuario del servidor web:
 
 ```bash
-curl -s -H "App-Token: $GLPI_APP_TOKEN" -H "Session-Token: $SESSION" \
-  "$GLPI_URL/listSearchOptions/Ticket" | head -c 2000
+ls -ld /var/www/glpi/files        # ajusta la ruta a tu instalación
+sudo chown -R www-data:www-data /var/www/glpi/files
 ```
 
-Prueba rápida de extremo a extremo:
+Si alguna carpeta de tipo (`PDF/`, `TXT/`, `XLSX/`…) pertenece a `root`, GLPI **acepta la subida
+y no guarda el fichero**: crea un documento de 0 bytes sin avisar. El puente lo detecta y borra
+la ficha vacía, pero el arreglo es este.
+
+### 3.6 Comprobar
 
 ```bash
-curl -s -H "App-Token: TU_APP_TOKEN" -H "Authorization: user_token TU_USER_TOKEN" "https://tu-glpi/apirest.php/initSession"
+curl -s -H "App-Token: TU_APP_TOKEN" \
+     -H "Authorization: user_token TU_USER_TOKEN" \
+     "https://tu-glpi/apirest.php/initSession"
 ```
 
-> **Importante sobre la autoría:** los seguimientos creados por la API se atribuyen a la cuenta
-> de servicio, no al usuario real. Por eso el bridge antepone *"Respuesta recibida desde Slack —
-> Nombre Apellido"* al contenido. Si necesitas autoría real, GLPI exige el `user_token` de cada
-> usuario (inviable) o un plugin que permita suplantación.
+Debe devolver un `session_token`.
 
 ---
 
-## 4. Configuración de la app de Slack
+## 4. Configurar la app de Slack
 
-1. https://api.slack.com/apps → **Create New App** → **From an app manifest** → pega
-   [`slack-app-manifest.yml`](slack-app-manifest.yml).
-2. **Basic Information → App-Level Tokens** → *Generate Token and Scopes*: nombre `socket`,
-   scope `connections:write` → copia el `xapp-…` en `SLACK_APP_TOKEN`.
-3. **Install to Workspace** → copia el **Bot User OAuth Token** `xoxb-…` en `SLACK_BOT_TOKEN`.
-4. **Socket Mode** e **Interactivity** deben quedar activados (el manifiesto ya lo hace;
-   Interactivity solo hace falta para `REPLY_MODE=modal`).
-5. Solo si vas a usar `CLEANUP_MODE=delete`: un **Owner de la organización** (Enterprise Grid)
-   debe generar un token con `admin.conversations:write` y ponerlo en `SLACK_ADMIN_TOKEN`.
+### 4.1 Crear la app
 
-### Scopes y para qué sirve cada uno
+1. https://api.slack.com/apps → **Create New App** → **From an app manifest**
+2. Elige el workspace
+3. Pega el contenido de [`slack-app-manifest.yml`](slack-app-manifest.yml) — el editor tiene
+   pestañas **JSON** y **YAML**: asegúrate de estar en la de YAML
+4. **Next** → **Create**
 
-| Scope | Uso |
+### 4.2 Instalar y obtener los tokens
+
+1. **Install App** → **Install to Workspace** → **Allow**
+2. Copia el **Bot User OAuth Token** (`xoxb-…`) → `SLACK_BOT_TOKEN`
+3. **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes**
+   - Nombre: `socket`
+   - Scope: `connections:write`
+   - **Generate** → copia el `xapp-…` → `SLACK_APP_TOKEN`
+
+### 4.3 Permisos que pide, y por qué
+
+Todos son **Bot Token Scopes**. Si los añades por error en *User Token Scopes*, la app actuaría
+suplantando a una persona y no funcionará.
+
+| Scope | Para qué |
 |---|---|
-| `chat:write` | `chat.postMessage`, `chat.delete` (el bot solo puede borrar lo suyo) |
-| `groups:write` | `conversations.create` / `invite` / **`kick`** / `archive` en canales privados |
-| `groups:history` | recibir `message.groups` (las respuestas del usuario) |
-| `groups:read` | `conversations.list` y `conversations.members` |
-| `im:write`, `im:history`, `im:read` | solo si usas `CONVERSATION_MODE=dm` |
-| `users:read.email` | `users.lookupByEmail`: **el puente entre la identidad GLPI y la de Slack** |
-| `users:read` | nombre real del autor |
-| `reactions:write` | ✅ como acuse de recibo al usuario |
+| `chat:write` | Publicar, editar y borrar sus propios mensajes |
+| `groups:write` | Crear, invitar, expulsar y archivar canales privados |
+| `groups:history` | Recibir los mensajes que escribe el usuario |
+| `groups:read` | Listar canales y sus miembros |
+| `users:read` | Nombre real del autor de cada respuesta |
+| `users:read.email` | **La pieza clave**: traduce el correo de GLPI a un usuario de Slack |
+| `reactions:write` | El ✅ de acuse de recibo |
+| `files:read` | Descargar los archivos que sube el usuario, para llevarlos a GLPI |
+| `files:write` | Subir a Slack los adjuntos de GLPI, y borrarlos al cerrar |
+| `im:write`, `im:history`, `im:read` | Solo si usas `CONVERSATION_MODE=dm` |
 
-La correspondencia de identidades se hace **por email**: el email principal del solicitante en
-GLPI debe coincidir con el de su cuenta de Slack. Si no hay coincidencia, el ticket se registra
-como *sin destinatario* y no se reintenta en bucle.
+**La correspondencia de identidades se hace por correo electrónico.** El correo principal del
+solicitante en GLPI tiene que ser el mismo que el de su cuenta de Slack. Si no coincide, ese
+usuario no recibe nada — y el puente lo registra en el log en vez de reintentarlo en bucle.
 
 ---
 
 ## 5. Puesta en marcha
 
-Requiere **Node.js ≥ 22.5** (usa el módulo `node:sqlite` integrado: cero dependencias nativas
-que compilar en el servidor). En Node 22 añade `--experimental-sqlite`; en Node 24 no hace falta.
-
 ```bash
-cd glpi-slack-bridge && npm install && cp .env.example .env
+npm install
+cp .env.example .env
 ```
 
-Rellena `.env` y arranca:
+Rellena en `.env` los valores no secretos (`GLPI_URL`, `GLPI_BRIDGE_USER_ID`,
+`GLPI_PROFILE_ID`) y mete los cuatro secretos con el script:
 
 ```bash
-npm start
+./set-secret.sh GLPI_APP_TOKEN
+./set-secret.sh GLPI_USER_TOKEN
+./set-secret.sh SLACK_BOT_TOKEN
+./set-secret.sh SLACK_APP_TOKEN
 ```
 
-## 6. Despliegue en un servidor
-
-No hace falta abrir ningún puerto: con Socket Mode el puente solo abre conexiones
-**salientes** hacia Slack y hacia GLPI. Puede vivir detrás de cualquier cortafuegos.
-
-```bash
-scp -r glpi-slack-bridge usuario@servidor:/opt/
-ssh usuario@servidor 'cd /opt/glpi-slack-bridge && docker compose up -d --build'
-```
-
-El `.env` viaja con el proyecto y no se copia a la imagen (está en `.dockerignore`):
-lo lee el contenedor en arranque a través de `env_file`.
-
-### Antes de arrancar en el servidor
-
-1. **Llévate `data/bridge.sqlite`** de la máquina donde estaba corriendo. Ahí viven el
-   cursor y el mapa ticket ⇄ canal. Si arrancas de cero, el puente no reenvía nada antiguo
-   —eso está garantizado— pero deja huérfanas las conversaciones que estuvieran abiertas:
-   sus canales ya no se limpiarían al cerrarse el ticket, y se crearían duplicados.
-
-   ```bash
-   docker compose up -d                      # crea el volumen
-   docker compose stop
-   docker run --rm -v glpi-slack-bridge_bridge-data:/d -v "$PWD/data":/src alpine \
-     cp /src/bridge.sqlite /d/bridge.sqlite
-   docker compose start
-   ```
-
-2. **Cuadra la zona horaria** con la del servidor de GLPI (`TZ` en el compose). La API de
-   GLPI devuelve fechas sin offset; si los relojes no coinciden, el cursor se desajusta y
-   se pierden o se repiten eventos.
-
-3. **Pon los tiempos de producción** en el `.env`: `CLEANUP_DELAY_MINUTES=1440` y
-   `CLEANUP_DELAY_SECONDS` vacío. Los 30 segundos son solo para probar.
-
-### Operación
-
-```bash
-docker compose logs -f                        # seguir el log
-docker compose exec glpi-slack-bridge node src/tools/preflight.js   # comprobar credenciales
-docker compose restart                        # tras cambiar el .env
-```
-
-El contenedor lleva un **healthcheck**: el sondeo deja un latido en la base de datos en cada
-ciclo y, si deja de latir más de tres ciclos, Docker marca el contenedor como `unhealthy`.
-Con `restart: unless-stopped` se levanta solo si el proceso muere; para que además se
-reinicie cuando se queda colgado sin morir, añade un supervisor tipo `autoheal` o revisa
-`docker compose ps` en tu monitorización.
-
-Los logs rotan a 3 ficheros de 10 MB, así que no llenan el disco.
-
-Antes de tocar nada real, la prueba con GLPI y Slack simulados:
+**Antes de arrancar nada**, con GLPI y Slack simulados:
 
 ```bash
 npm test
 ```
 
-Y con tus credenciales ya puestas, la comprobación previa — verifica tokens, permisos del
-perfil de GLPI, `GLPI_BRIDGE_USER_ID`, scopes de Slack y que los emails de la lista blanca
-existen en Slack, **sin escribir nada en ningún sitio**:
+Y contra los sistemas reales, sin escribir nada en ninguno:
 
 ```bash
 npm run check
 ```
 
-Cubre las cinco cosas que se rompen en producción: alta de la conversación, entrega del
-seguimiento, idempotencia, anti-bucle y limpieza al cerrar.
+Verifica credenciales, el perfil de GLPI, la visibilidad de tickets, los scopes de Slack y que
+los correos de la lista blanca existen en ambos sistemas. **No arranques hasta que dé `Todo listo`.**
 
-### Pilotar sin afectar a nadie
-
-El sondeo mira **todos** los tickets modificados, así que sin protección el primer técnico que
-responda a cualquier ticket le abriría un canal a un usuario real. Dos interruptores:
+Entonces:
 
 ```bash
-ALLOWED_REQUESTER_EMAILS=tu.email@empresa.com   # lista blanca de solicitantes
-DRY_RUN=true                                    # no escribe en Slack ni en GLPI
+npm start
 ```
 
-Con la lista blanca puesta, cualquier ticket cuyo solicitante no esté en ella se descarta
-entero: ni canal, ni mensaje, ni seguimiento. Es un filtro en el puente, no en GLPI.
-
-Si quieres que el aislamiento lo garantice el propio GLPI y no tu configuración, lo sólido es
-crear una **entidad de pruebas** y dar a la cuenta de servicio acceso *solo* a esa entidad: la
-API deja de devolver los demás tickets, y ningún error de configuración del bridge puede
-alcanzarlos.
-
-Recorrido sugerido: `DRY_RUN=true` unos días contra producción para ver en el log qué habría
-enviado → lista blanca con tu email para probar el ciclo completo de verdad → añadir dos o tres
-compañeros → vaciar la lista.
-
-Prueba de aceptación contra los sistemas reales:
-
-1. Arranca el bridge y confirma en el log `Primera activacion. Cursor fijado en …`.
-2. Abre un ticket de prueba en GLPI con un usuario cuyo email exista en Slack.
-3. Responde como técnico → debe aparecer el canal privado `tkt-000123` con el texto exacto.
-4. Contesta en Slack → debe aparecer como seguimiento en GLPI, con ✅ en tu mensaje.
-5. Resuelve el ticket → mensaje de cierre, borrado de los mensajes del bot, expulsión y
-   archivado. **Comprueba desde la cuenta del usuario que el canal ya no aparece** ni en la
-   barra lateral, ni en *Canales → Archivados*, ni en la búsqueda.
-6. Comprueba que **ningún** ticket antiguo generó canal.
+La primera línea del log debe ser `Primera activacion. Cursor fijado en …`.
 
 ---
 
-## 7. Límites conocidos y siguientes pasos
+## 6. Rodaje sin afectar a nadie
 
-- **Adjuntos**: no se sincronizan en ninguna dirección. Añadir `files:read` + `GET /Document`
-  y subida con `files.uploadV2` / `POST /Document`.
-- **Rate limits de Slack**: `conversations.create` es Tier 2 (~20/min). Con picos de tickets,
-  encola las creaciones.
-- **Número de canales**: los canales archivados siguen contando en el workspace aunque el
-  usuario no los vea. Si generas cientos al mes, valora el borrado real en Enterprise Grid.
-- **Retención y exportaciones**: `purge` retira el acceso, no borra de los servidores de
-  Slack. Una exportación de datos del workspace (o el modo Discovery en Grid) seguiría
-  incluyendo los mensajes del usuario. Con `REPLY_MODE=modal` no hay mensajes de usuario que
-  exportar.
-- **Alta disponibilidad**: una sola instancia. SQLite y el cursor no están pensados para dos
-  procesos en paralelo; si necesitas HA, mueve el estado a PostgreSQL y añade un lock.
-- **Notas privadas**: los seguimientos con `is_private = 1` nunca salen a Slack (deliberado).
-- **Reapertura**: si un ticket cerrado se reabre, el bridge crea un canal nuevo (el anterior
-  queda archivado). Si prefieres desarchivar, `ensureConversation` ya contempla `unarchive`.
+El sondeo mira **todos** los tickets modificados. Sin protección, el primer técnico que
+responda a cualquier ticket le abriría un canal a un usuario real. Dos interruptores:
 
-Fuentes: [Webhooks en GLPI](https://help.glpi-project.org/documentation/modules/configuration/webhook.md) ·
-[Foro GLPI — llamadas a APIs externas](https://forum.glpi-project.org/viewtopic.php?id=288646)
+```bash
+ALLOWED_REQUESTER_EMAILS=tu.correo@empresa.com   # lista blanca de solicitantes
+DRY_RUN=true                                     # no escribe en Slack ni en GLPI
+```
+
+Con la lista blanca puesta, cualquier ticket cuyo solicitante no esté en ella se descarta
+entero: ni canal, ni mensaje, ni seguimiento.
+
+Si quieres que el aislamiento lo garantice el propio GLPI y no tu configuración, crea una
+**entidad de pruebas** y da al usuario de servicio acceso *solo* a esa entidad: la API deja de
+devolver los demás tickets.
+
+Recorrido recomendado: `DRY_RUN=true` unos días → lista blanca contigo → añadir dos o tres
+compañeros → vaciar la lista.
+
+---
+
+## 7. Configuración completa
+
+### GLPI
+
+| Variable | Por defecto | Qué hace |
+|---|---|---|
+| `GLPI_URL` | — | Raíz de `apirest.php`, sin barra final |
+| `GLPI_APP_TOKEN` | — | Token del cliente API |
+| `GLPI_USER_TOKEN` | — | Token del usuario de servicio |
+| `GLPI_BRIDGE_USER_ID` | `0` | Sus seguimientos nunca se reenvían a Slack (anti-bucle) |
+| `GLPI_PROFILE_ID` | `0` | Perfil que fija la sesión. Sin esto puede entrar como Self-Service |
+
+### Slack
+
+| Variable | Por defecto | Qué hace |
+|---|---|---|
+| `SLACK_BOT_TOKEN` | — | Token del bot |
+| `SLACK_APP_TOKEN` | — | Socket Mode. Si lo dejas vacío, necesitas `SLACK_SIGNING_SECRET` y un puerto público |
+| `SLACK_ADMIN_TOKEN` | vacío | Enterprise Grid: permite el borrado real del canal |
+
+### Conversación
+
+| Variable | Por defecto | Qué hace |
+|---|---|---|
+| `CONVERSATION_MODE` | `channel` | `channel` (canal privado por ticket) o `dm`. Solo `channel` permite que la conversación desaparezca |
+| `CHANNEL_PREFIX` | `ticket-glpi-` | Prefijo del nombre del canal |
+| `CHANNEL_INCLUDE_TITLE` | `false` | Añade el título del ticket al nombre |
+| `REPLY_MODE` | `inline` | `inline` (escribir en el canal) o `modal` (botón + ventana; no deja ningún mensaje humano en el canal) |
+| `MESSAGE_COLORS` | `true` | Barra de color lateral por tipo de mensaje |
+| `INVITE_TECHNICIAN` | `false` | Invita también al técnico asignado al canal |
+| `HISTORY_MESSAGES` | `3` | Mensajes previos que se resumen al abrir el canal de un ticket que ya existía |
+
+### Cierre y limpieza
+
+| Variable | Por defecto | Qué hace |
+|---|---|---|
+| `CLEANUP_MODE` | `purge` | `archive`, `purge` (borra mensajes + expulsa + archiva) o `delete` (solo Grid) |
+| `CLEANUP_DELAY_MINUTES` | `0` | Margen de gracia antes de limpiar |
+| `CLEANUP_DELAY_SECONDS` | vacío | Si está puesto, manda sobre los minutos. Para pruebas |
+| `REOPEN_ON_REPLY` | `true` | Si el usuario escribe en el margen de gracia, reabre el ticket |
+| `REOPEN_STATUS` | `2` | Estado al que vuelve (2 = en curso, 1 = nuevo) |
+| `NOTIFY_TECHNICIAN` | `true` | Avisa por mensaje directo al técnico asignado de las reaperturas |
+| `TEAM_CHANNEL` | vacío | Canal del equipo para los avisos sin técnico asignado. El bot debe estar dentro |
+
+### Sondeo y seguridad
+
+| Variable | Por defecto | Qué hace |
+|---|---|---|
+| `POLL_INTERVAL_SECONDS` | `30` | Cada cuánto se consulta GLPI |
+| `POLL_OVERLAP_SECONDS` | `60` | Solape del cursor, para absorber desfases de reloj |
+| `MAX_CATCHUP_HOURS` | `0` | Si el puente ha estado parado más de esto, no recupera lo acumulado. `0` = sin límite |
+| `ALLOWED_REQUESTER_EMAILS` | vacío | Lista blanca de solicitantes. Vacío = todos |
+| `DRY_RUN` | `false` | Solo registra en el log lo que haría |
+| `ONLY_TICKETS_CREATED_AFTER_ACTIVATION` | `false` | `true` ignora los tickets anteriores a la activación aunque tengan actividad nueva |
+| `ENFORCE_PRIVACY` | `true` | Expulsa de los canales a quien entre sin haber sido invitado por el puente |
+| `PRIVACY_ALLOWLIST` | vacío | IDs de Slack que pueden entrar siempre |
+| `DB_PATH` | `./data/bridge.sqlite` | Ruta de la base de datos |
+| `LOG_LEVEL` | `info` | `error`, `warn`, `info` o `debug` |
+| `PORT` | `3000` | Solo si no usas Socket Mode |
+
+---
+
+## 8. Despliegue en un servidor
+
+No hace falta abrir ningún puerto: con Socket Mode el puente solo abre conexiones **salientes**.
+
+```bash
+docker compose up -d --build
+```
+
+El `.env` no entra en la imagen (está en `.dockerignore`); lo lee el contenedor en arranque.
+
+**Antes de arrancar en el servidor:**
+
+1. **Llévate `data/bridge.sqlite`** de la máquina anterior. Ahí viven el cursor y el mapa
+   ticket ⇄ canal. Si arrancas de cero no se reenvía nada antiguo, pero las conversaciones
+   abiertas quedan huérfanas: sus canales ya no se limpiarían y se crearían duplicados.
+
+   ```bash
+   docker compose up -d && docker compose stop
+   docker run --rm -v glpi-slack-bridge_bridge-data:/d -v "$PWD/data":/src alpine \
+     cp /src/bridge.sqlite /d/bridge.sqlite
+   docker compose start
+   ```
+
+2. **Cuadra la zona horaria** con la del servidor de GLPI (`TZ` en el compose). La API de GLPI
+   devuelve fechas sin offset; si los relojes no coinciden, el cursor se desajusta.
+
+3. **Pon los tiempos de producción**: `CLEANUP_DELAY_MINUTES=1440` y `CLEANUP_DELAY_SECONDS`
+   vacío. Considera `MAX_CATCHUP_HOURS=12`.
+
+4. **Haz copia de `bridge.sqlite`** periódicamente. Es el único estado que no se puede
+   reconstruir.
+
+**Operación:**
+
+```bash
+docker compose logs -f
+docker compose exec glpi-slack-bridge node src/tools/preflight.js
+docker compose restart          # tras cambiar el .env
+```
+
+El contenedor lleva un **healthcheck**: el sondeo deja un latido en la base de datos en cada
+ciclo y, si deja de latir más de tres ciclos, Docker lo marca como `unhealthy`.
+
+---
+
+## 9. Cómo funciona por dentro
+
+### Por qué sondeo y no webhooks
+
+Los webhooks salientes nativos llegan con **GLPI 11**. En GLPI 10 y anteriores no existen en el
+core, y además obligan a exponer un endpoint alcanzable desde el servidor de GLPI. El sondeo
+funciona en cualquier versión, sin plugins ni puertos, y convierte el requisito de «nada
+retroactivo» en algo trivial: **el cursor es el interruptor de activación**.
+
+Si estás en GLPI 11 y prefieres webhooks, sustituye `src/poller.js` por un endpoint que valide
+la firma y llame a las mismas funciones. Deja el sondeo como red de seguridad: un webhook
+perdido es un mensaje que el usuario nunca recibe.
+
+### Por qué canal privado y no mensaje directo
+
+**Slack no permite borrar un canal** salvo `admin.conversations.delete`, que solo existe en
+Enterprise Grid. Tampoco se puede borrar el historial de un DM. Y **archivar no oculta nada**:
+el canal archivado le sigue apareciendo a quien fue miembro.
+
+Lo que sí funciona: **un canal privado del que no eres miembro no existe para ti**. No está en
+la barra lateral, ni en archivados, ni en la búsqueda. Por eso `CLEANUP_MODE=purge` borra los
+mensajes del bot, **expulsa a los miembros** y archiva, en ese orden —en un canal archivado ya
+no se puede expulsar a nadie—.
+
+Límite honesto: un bot solo puede borrar sus propios mensajes. Los del usuario siguen
+existiendo en el canal archivado, donde solo un administrador del workspace podría llegar. Con
+`REPLY_MODE=modal` no llega a haber mensajes de usuario.
+
+### Estado
+
+Todo en SQLite (`data/bridge.sqlite`):
+
+| Tabla | Para qué |
+|---|---|
+| `kv` | `cursor`, `activated_at`, `heartbeat` |
+| `conversations` | **El vínculo**: `ticket_id` ⇄ `channel_id`, con índice único en ambos |
+| `bot_messages`, `bot_files` | Qué publicó el bot, para poder borrarlo al cerrar |
+| `followup_messages` | Seguimiento de GLPI ⇄ mensaje de Slack, para reflejar ediciones |
+| `outbound_messages` | Mensaje de Slack ⇄ seguimiento de GLPI, para reflejar ediciones |
+| `seen_followups` | Idempotencia y anti-bucle |
+| `channel_members` | A quién invitó el bot; el resto sobra en el canal |
+
+### Anti-bucle
+
+Sin esto, cada respuesta escrita en GLPI desde Slack vuelve a Slack, que la reescribe en GLPI…
+Tres capas:
+
+1. Al crear un seguimiento desde Slack, su `id` se guarda en `seen_followups` con origen
+   `slack`. El sondeo nunca lo reenvía.
+2. Se descarta todo seguimiento cuyo autor sea `GLPI_BRIDGE_USER_ID`.
+3. En Slack se ignora cualquier evento con `bot_id`.
+
+### El cursor
+
+- Primer arranque: `cursor = activated_at = now()`. Nada retroactivo.
+- Cada pasada avanza a `inicio − POLL_OVERLAP_SECONDS`. Los duplicados que genere el solape los
+  filtra `seen_followups`.
+- **Si algún ticket falla, el cursor no avanza.** Los seguimientos nuevos se filtran por fecha
+  posterior al cursor, así que moverlo tras un error de red dejaría ese mensaje fuera para
+  siempre. Repetir el ciclo es inofensivo.
+- Para descartar lo acumulado tras una parada larga: `npm run cursor:reset`.
+
+---
+
+## 10. Resolución de problemas
+
+| Síntoma | Causa | Solución |
+|---|---|---|
+| `npm run check` dice **«la cuenta de servicio no ve NINGÚN ticket»** | La sesión entra con perfil Self-Service | Pon `GLPI_PROFILE_ID` con el id del perfil Técnico |
+| **No llega nada a Slack** y el log no da errores | El solicitante no está en `ALLOWED_REQUESTER_EMAILS`, o su correo no coincide entre GLPI y Slack | `npm run check` verifica los correos en ambos sistemas |
+| `users_not_found` | El correo de GLPI no existe en Slack | Corrige el correo en uno de los dos |
+| `missing_scope` | Falta un permiso en la app | Añádelo en *Bot Token Scopes* y **reinstala** la app |
+| `invalid_auth` | Token caducado o mal copiado | `./set-secret.sh SLACK_BOT_TOKEN` |
+| `restricted_action` al expulsar | El workspace restringe quitar miembros de canales privados | *Workspace settings → Permissions* |
+| **Los adjuntos llegan a GLPI vacíos** (0 bytes) | GLPI no puede escribir en su directorio de documentos | `chown -R www-data:www-data` sobre el directorio `files` |
+| `ERROR_GLPI_ADD: Fallo al mover el archivo` | Lo mismo | Igual |
+| **Se ven etiquetas `<p>` en los mensajes** | El HTML de GLPI llega escapado y hay que decodificar antes de limpiar | Ya resuelto en `src/format.js`; si reaparece, revisa el orden de `decodeEntities` |
+| **Se abren canales de tickets antiguos** | El cursor viene de una parada larga | `npm run cursor:reset`, o `MAX_CATCHUP_HOURS` |
+| **El puente parece vivo pero no hace nada** | El sondeo se colgó | `node src/tools/healthcheck.js` lo detecta; en Docker lo marca `unhealthy` |
+| `name_taken` al crear un canal | Quedó un canal huérfano de un arranque anterior | El puente lo reutiliza solo; si no, archívalo o renómbralo a mano |
+
+Sube el detalle del log con `LOG_LEVEL=debug`.
+
+---
+
+## 11. Límites conocidos
+
+- **Los mensajes del usuario no se pueden borrar.** Ningún bot puede. `purge` retira el acceso;
+  para que no existan, `REPLY_MODE=modal`.
+- **`purge` no borra de los servidores de Slack.** Una exportación del workspace seguiría
+  incluyendo los mensajes del usuario.
+- **Los canales archivados siguen contando** en el workspace aunque nadie los vea. Con volumen
+  alto, conviene un barrido manual periódico desde la consola de administración.
+- **Autoría en GLPI**: los seguimientos creados por la API se atribuyen a la cuenta de servicio.
+  El puente antepone *«Respuesta recibida desde Slack — Nombre Apellido»* al contenido.
+- **Una sola instancia.** SQLite y el cursor no están pensados para dos procesos en paralelo.
+  Para alta disponibilidad hay que mover el estado a PostgreSQL y añadir un lock.
+- **Las notas privadas** (`is_private`) nunca salen a Slack. Es deliberado.
+- **Sin cobertura automática de los manejadores de Slack**: `npm test` ejercita el sondeo y el
+  ciclo completo con sistemas simulados, pero los eventos de Slack se verifican a mano.
+
+---
+
+## 12. Estructura
+
+```
+src/
+  index.js       Arranque, manejadores de eventos de Slack (Slack → GLPI)
+  poller.js      Ciclo de sondeo de GLPI (GLPI → Slack)
+  glpi.js        Cliente de la API REST de GLPI
+  slack.js       Conversaciones, bloques de mensaje y limpieza
+  store.js       Estado en SQLite
+  format.js      Conversión HTML de GLPI ⇄ mrkdwn de Slack
+  config.js      Lectura y validación del entorno
+  tools/
+    preflight.js    npm run check
+    healthcheck.js  Sonda para Docker
+    reset-cursor.js npm run cursor:reset
+test/
+  e2e-mock.mjs      Ciclo completo con GLPI y Slack simulados
+```
