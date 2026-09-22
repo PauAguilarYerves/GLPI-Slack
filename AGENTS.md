@@ -44,6 +44,7 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
 | `npm run check` | Verifica credenciales, permisos y correspondencia de correos. No escribe |
 | `npm start` | Arranca el puente |
 | `npm run cursor:reset` | Fija el cursor en «ahora»: descarta lo acumulado durante una parada |
+| `npm run alert:test` | Manda un aviso de prueba al canal de alertas |
 
 ## Dónde tocar cada cosa
 
@@ -55,6 +56,7 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
 | Llamadas a la API de GLPI | `src/glpi.js` |
 | Conversión HTML ⇄ mrkdwn | `src/format.js` |
 | Esquema de estado | `src/store.js` |
+| Avisos de fallos del puente | `src/alerts.js` |
 | Nueva variable de entorno | `src/config.js` **y** `.env.example` **y** la tabla del README |
 
 ## Trampas conocidas
@@ -70,6 +72,11 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
 - **El `kick` va antes del `archive`**: en un canal archivado ya no se puede expulsar a nadie.
 - **Si un ticket falla en un ciclo, el cursor no avanza.** No lo «optimices»: los seguimientos
   se filtran por fecha posterior al cursor, y moverlo tras un error pierde ese mensaje.
+- **Con barra de color, el texto va en `fallback`**, no en `text`: mandar los dos hace que
+  Slack pinte el titulo dos veces, una encima del adjunto y otra dentro.
+- **Los avisos de fallo se agrupan por tipo.** Con el sondeo cada pocos segundos, publicar cada
+  error inunda el canal y acaban silenciandolo. Si anades un aviso nuevo, dale un `tipo`
+  estable y deja que `alerts.js` haga el enfriamiento.
 - **Tres capas de anti-bucle** (`seen_followups`, `GLPI_BRIDGE_USER_ID`, `bot_id`). Si tocas el
   flujo de escritura, comprueba que ninguna se rompe: el síntoma es un ping-pong infinito.
 

@@ -25,6 +25,8 @@ la conversación cuando el ticket se resuelve.
 | El técnico añade un seguimiento | Llega al canal, con sus adjuntos |
 | El técnico edita un seguimiento | Se reescribe el mensaje, marcado como editado |
 | El ticket se resuelve o cierra | Se publica la solución y el canal desaparece del Slack del usuario |
+| El ticket se elimina | Se avisa y se cierra la conversación, aunque GLPI ya no lo devuelva |
+| El ticket se reabre | Se estrena canal `-r2`; el anterior queda archivado |
 
 | Evento en Slack | Qué ocurre en GLPI |
 |---|---|
@@ -32,6 +34,9 @@ la conversación cuando el ticket se resuelve.
 | El usuario edita su mensaje | Se reescribe ese seguimiento |
 | El usuario sube un archivo | Se adjunta al ticket como documento |
 | El usuario escribe tras el cierre | El ticket se reabre y se avisa al técnico por mensaje directo |
+
+Y de sí mismo: si el puente no puede hablar con GLPI, si un usuario no tiene cuenta de Slack o
+si alguien le ha cambiado los permisos, **lo dice en un canal de alertas** (sección 9).
 
 **Regla de oro:** en el primer arranque el cursor se fija en ese instante. Nada anterior —ni
 tickets históricos ni el historial de los que están abiertos— se procesa jamás.
@@ -257,6 +262,14 @@ Y contra los sistemas reales, sin escribir nada en ninguno:
 npm run check
 ```
 
+| Comando | Qué hace |
+|---|---|
+| `npm test` | Ciclo completo con GLPI y Slack simulados. Rápido, sin red |
+| `npm run check` | Verifica credenciales, permisos y correspondencia de correos. No escribe |
+| `npm start` | Arranca el puente |
+| `npm run alert:test` | Manda un aviso de prueba al canal de alertas |
+| `npm run cursor:reset` | Fija el cursor en «ahora»: descarta lo acumulado durante una parada |
+
 Verifica credenciales, el perfil de GLPI, la visibilidad de tickets, los scopes de Slack y que
 los correos de la lista blanca existen en ambos sistemas. **No arranques hasta que dé `Todo listo`.**
 
@@ -345,6 +358,8 @@ compañeros → vaciar la lista.
 | `MAX_CATCHUP_HOURS` | `0` | Si el puente ha estado parado más de esto, no recupera lo acumulado. `0` = sin límite |
 | `SWEEP_INTERVAL_MINUTES` | `10` | Cada cuánto se repasan las conversaciones abiertas para detectar tickets eliminados en GLPI. `0` = desactivado |
 | `WATCHDOG_MINUTES` | `5` | Si el sondeo deja de progresar durante este tiempo, el proceso se cierra solo para que el supervisor lo reinicie. `0` = desactivado |
+| `ALERT_CHANNEL` | vacío | Canal privado donde el puente avisa de sus propios fallos. El bot debe estar dentro. Vacío = solo log |
+| `ALERT_COOLDOWN_MINUTES` | `30` | Un mismo tipo de fallo no se repite antes de este tiempo |
 | `ALLOWED_REQUESTER_EMAILS` | vacío | Lista blanca de solicitantes. Vacío = todos |
 | `DRY_RUN` | `false` | Solo registra en el log lo que haría |
 | `ONLY_TICKETS_CREATED_AFTER_ACTIVATION` | `false` | `true` ignora los tickets anteriores a la activación aunque tengan actividad nueva |
@@ -445,7 +460,49 @@ nunca ante procesos quietos.
 
 ---
 
-## 9. Cómo funciona por dentro
+## 9. Avisos cuando algo falla
+
+Un puente roto es silencioso: los usuarios dejan de recibir respuestas y nadie lo sabe hasta
+que alguien pregunta. Por eso el puente avisa de sus propios fallos en un canal de Slack.
+
+```bash
+ALERT_CHANNEL=C0123456789        # ID del canal, o #nombre
+ALERT_COOLDOWN_MINUTES=30
+```
+
+Crea un canal privado, invita al bot con `/invite @GLPI` y pon su ID. Para comprobar que
+llega, sin romper nada:
+
+```bash
+npm run alert:test
+# o dentro del contenedor:
+docker compose run --rm glpi-slack-bridge node src/tools/test-alert.js
+```
+
+### Qué avisa
+
+| Aviso | Por qué importa |
+|---|---|
+| **El puente no puede consultar GLPI** | Token caducado, GLPI caído o red cortada. Mientras dure, nadie recibe nada |
+| **Un usuario no recibe sus tickets** | Su correo de GLPI no existe en Slack. Es el fallo que nadie reporta: el afectado ni sabe que esta integración existe |
+| **Un adjunto no llegó** | Un documento de GLPI que no se pudo bajar o subir |
+| **No se pueden cerrar los canales** | Alguien cambió los permisos del workspace y las conversaciones de tickets cerrados siguen visibles |
+| **Falta un permiso de la app** | Alguien tocó los scopes en Slack |
+| **Arranque tras una parada no limpia** | El proceso se cayó o el watchdog tuvo que matarlo |
+
+Cada uno lleva su mensaje en verde cuando la cosa se recupera, para no tener que entrar a
+comprobarlo.
+
+### Por qué agrupa
+
+Con el sondeo cada pocos segundos, publicar cada error daría cientos de mensajes por hora. El
+canal acabaría silenciado, que es peor que no tenerlo. Por eso **un mismo tipo de fallo no se
+repite antes de `ALERT_COOLDOWN_MINUTES`**, y el siguiente aviso dice cuántas veces ha ocurrido
+mientras callaba. Doscientos fallos seguidos producen un solo mensaje.
+
+---
+
+## 10. Cómo funciona por dentro
 
 ### Por qué sondeo y no webhooks
 
@@ -509,7 +566,7 @@ Tres capas:
 
 ---
 
-## 10. Resolución de problemas
+## 11. Resolución de problemas
 
 | Síntoma | Causa | Solución |
 |---|---|---|
@@ -525,12 +582,15 @@ Tres capas:
 | **Se abren canales de tickets antiguos** | El cursor viene de una parada larga | `npm run cursor:reset`, o `MAX_CATCHUP_HOURS` |
 | **El puente parece vivo pero no hace nada** | El sondeo se colgó | `node src/tools/healthcheck.js` lo detecta; en Docker lo marca `unhealthy` |
 | `name_taken` al crear un canal | Quedó un canal huérfano de un arranque anterior | El puente lo reutiliza solo; si no, archívalo o renómbralo a mano |
+| **No llegan los avisos al canal de alertas** | El bot no está en el canal, o `ALERT_CHANNEL` se añadió con `sed` a un `.env` que no tenía esa línea | `npm run check` lo verifica; `sed -i 's/^X=.*/.../'` no crea líneas nuevas |
+| **Un canal sigue abierto con el ticket ya borrado** | El barrido aún no ha pasado | Corre cada `SWEEP_INTERVAL_MINUTES`; un ticket borrado devuelve 404 y no reaparece en la búsqueda |
+| **El título del mensaje sale dos veces** | Se mandó `text` junto con `attachments` | Con barra de color, el texto de notificación va como `fallback` dentro del adjunto |
 
 Sube el detalle del log con `LOG_LEVEL=debug`.
 
 ---
 
-## 11. Límites conocidos
+## 12. Límites conocidos
 
 - **Los mensajes del usuario no se pueden borrar.** Ningún bot puede. `purge` retira el acceso;
   para que no existan, `REPLY_MODE=modal`.
@@ -545,10 +605,13 @@ Sube el detalle del log con `LOG_LEVEL=debug`.
 - **Las notas privadas** (`is_private`) nunca salen a Slack. Es deliberado.
 - **Sin cobertura automática de los manejadores de Slack**: `npm test` ejercita el sondeo y el
   ciclo completo con sistemas simulados, pero los eventos de Slack se verifican a mano.
+- **Sin copia de seguridad automática** de `bridge.sqlite`. Si se pierde, el puente arranca
+  limpio y no reenvía nada antiguo, pero los canales que estuvieran abiertos quedan huérfanos:
+  nadie los cerrará y habría que archivarlos a mano.
 
 ---
 
-## 12. Estructura
+## 13. Estructura
 
 ```
 src/
@@ -558,10 +621,12 @@ src/
   slack.js       Conversaciones, bloques de mensaje y limpieza
   store.js       Estado en SQLite
   format.js      Conversión HTML de GLPI ⇄ mrkdwn de Slack
+  alerts.js      Avisos de los fallos del propio puente, con agrupado
   config.js      Lectura y validación del entorno
   tools/
     preflight.js    npm run check
     healthcheck.js  Sonda para Docker
+    test-alert.js   npm run alert:test
     reset-cursor.js npm run cursor:reset
 test/
   e2e-mock.mjs      Ciclo completo con GLPI y Slack simulados
