@@ -9,6 +9,7 @@ const glpiNow = (offsetMs = 0) => {
 };
 
 let ticketStatus = 2;
+let ticketBorrado = false;
 // Tickets extra que aparecen a mitad de la prueba (alta reciente).
 const extras = new Map();
 const createdFollowups = [];
@@ -34,7 +35,10 @@ globalThis.fetch = async (url, opts = {}) => {
     for (const id of extras.keys()) filas[i++] = { 2: id, 19: glpiNow() };
     return json({ totalcount: i, count: i, data: filas });
   }
-  if (p === '/Ticket/42') return json({ id: 42, name: 'El PC no arranca', status: ticketStatus, date_creation: '2026-09-20 09:00:00' });
+  if (p === '/Ticket/42') {
+    if (ticketBorrado) return json(['ERROR_ITEM_NOT_FOUND', 'Elemento no encontrado'], 404);
+    return json({ id: 42, name: 'El PC no arranca', status: ticketStatus, date_creation: '2026-09-20 09:00:00' });
+  }
   const extra = /^\/Ticket\/(\d+)$/.exec(p);
   if (extra && extras.has(Number(extra[1]))) return json(extras.get(Number(extra[1])));
   // Sub-recursos de los tickets extra (no del 42, que tiene sus propias rutas).
@@ -45,10 +49,15 @@ globalThis.fetch = async (url, opts = {}) => {
   if (p === '/Ticket/42/ITILFollowup') return json(followups);
   if (/^\/ITILFollowup\/\d+\/Document_Item$/.test(p)) return json([]);
   if (p === '/Ticket/42/ITILSolution') return json([{ id: 555, content: '<p>Cambiada la fuente de alimentaci&oacute;n.</p>' }]);
-  if (p === '/Ticket/42/Ticket_User') return json([{ users_id: 5, type: 1 }, { users_id: 7, type: 2 }]);
+  // Dos solicitantes (type 1) y un tecnico asignado (type 2).
+  if (p === '/Ticket/42/Ticket_User') {
+    return json([{ users_id: 5, type: 1 }, { users_id: 6, type: 1 }, { users_id: 7, type: 2 }]);
+  }
   if (p === '/User/5') return json({ id: 5, name: 'pau', firstname: 'Pau', realname: 'Pérez' });
   if (p === '/User/7') return json({ id: 7, name: 'tecnico', firstname: 'Marta', realname: 'Gil' });
+  if (p === '/User/6') return json({ id: 6, name: 'lucia', firstname: 'Lucía', realname: 'Soler' });
   if (p === '/User/5/UserEmail') return json([{ email: 'pau@empresa.com', is_default: 1 }]);
+  if (p === '/User/6/UserEmail') return json([{ email: 'lucia@empresa.com', is_default: 1 }]);
   if (p === '/User/7/UserEmail') return json([{ email: 'marta@empresa.com', is_default: 1 }]);
   if (p === '/ITILFollowup' && opts.method === 'POST') {
     const body = JSON.parse(opts.body);
@@ -73,7 +82,13 @@ let ts = 1700000000;
 const fakeClient = {
   auth: { test: async () => ({ user_id: 'U_BOT' }) },
   users: {
-    lookupByEmail: async ({ email }) => { calls.push(['lookupByEmail', email]); return { user: { id: email.startsWith('pau') ? 'U_PAU' : 'U_MARTA' } }; },
+    lookupByEmail: async ({ email }) => {
+      calls.push(['lookupByEmail', email]);
+      const mapa = { 'pau@empresa.com': 'U_PAU', 'lucia@empresa.com': 'U_LUCIA', 'marta@empresa.com': 'U_MARTA' };
+      const id = mapa[email];
+      if (!id) { const e = new Error('users_not_found'); e.data = { error: 'users_not_found' }; throw e; }
+      return { user: { id } };
+    },
     info: async ({ user }) => ({ user: { real_name: 'Pau Pérez', name: user } }),
   },
   conversations: {
@@ -121,7 +136,15 @@ store.setCursor(new Date(Date.now() - 3600_000).toISOString());
 
 console.log('--- PASADA 1: seguimiento nuevo del tecnico ---');
 await pollOnce(fakeClient);
-calls.splice(0).forEach((c) => console.log(' ', c.join(' | ').slice(0, 220)));
+const llamadas1 = calls.splice(0);
+llamadas1.forEach((c) => console.log(' ', c.join(' | ').slice(0, 220)));
+
+const invitados = llamadas1.find((c) => c[0] === 'invite');
+if (!invitados || !String(invitados[2]).includes('U_PAU') || !String(invitados[2]).includes('U_LUCIA')) {
+  console.error('FALLO: con dos solicitantes deben entrar los dos al canal. Invitados:', invitados?.[2]);
+  process.exit(1);
+}
+console.log('  dos solicitantes invitados:', invitados[2]);
 
 console.log('--- PASADA 2: sin novedades (idempotencia) ---');
 await pollOnce(fakeClient);
@@ -245,6 +268,24 @@ if (store.getCursor() === cursorAntes) {
   console.error('FALLO: el cursor deberia avanzar una vez resuelto el error');
   process.exit(1);
 }
+
+console.log('--- PASADA 7: el ticket se ELIMINA en GLPI ---');
+// El ticket sigue vivo en el estado del puente tras la reapertura de la pasada 5.
+ticketBorrado = true;
+store.setKv('last_sweep', '0');           // forzar el barrido en este ciclo
+calls.splice(0);
+await pollOnce(fakeClient);
+calls.forEach((c) => console.log(' ', c.join(' | ').slice(0, 170)));
+const tras = store.getConversationByTicket(42);
+if (!tras.cleaned_at) {
+  console.error('FALLO: el canal de un ticket eliminado sigue abierto');
+  process.exit(1);
+}
+if (!calls.some((c) => c[0] === 'archive')) {
+  console.error('FALLO: no se archivo el canal del ticket eliminado');
+  process.exit(1);
+}
+ticketBorrado = false;
 
 const acciones = accionesCierre;
 const esperado = ['delete', 'kick', 'archive'];

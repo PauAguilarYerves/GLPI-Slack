@@ -216,17 +216,47 @@ export class GlpiClient {
     return user?.email || null;
   }
 
-  /** Devuelve { users_id, email, name } del solicitante principal. */
-  async getRequester(ticketId, ticket) {
-    const actors = await this.getTicketUsers(ticketId);
-    const requester = actors.find((a) => Number(a.type) === 1);
-    const usersId = Number(requester?.users_id) || Number(ticket?.users_id_recipient) || 0;
-    if (!usersId) {
-      return { users_id: 0, email: requester?.alternative_email || null, name: null };
-    }
+  async resolverUsuario(usersId, alternativeEmail = null) {
     const [user, email] = await Promise.all([this.getUser(usersId), this.getUserEmail(usersId)]);
     const name = [user?.firstname, user?.realname].filter(Boolean).join(' ') || user?.name || null;
-    return { users_id: usersId, email: email || requester?.alternative_email || null, name };
+    return { users_id: Number(usersId), email: email || alternativeEmail || null, name };
+  }
+
+  /**
+   * TODOS los solicitantes del ticket. Un ticket puede tener varios, y si solo
+   * se atiende al primero el resto no se entera de nada.
+   */
+  async getRequesters(ticketId, ticket) {
+    const actors = await this.getTicketUsers(ticketId);
+
+    // Un solicitante puede ser un usuario de GLPI o solo un correo suelto: los
+    // tickets creados por integraciones externas suelen venir asi, con
+    // users_id 0 y el correo en alternative_email.
+    const solicitantes = actors.filter(
+      (a) => Number(a.type) === 1 && (Number(a.users_id) || a.alternative_email),
+    );
+
+    if (solicitantes.length === 0) {
+      // Sin solicitante declarado, el creador del ticket es lo unico que hay.
+      const fallback = Number(ticket?.users_id_recipient) || 0;
+      return fallback ? [await this.resolverUsuario(fallback)] : [];
+    }
+
+    const resueltos = [];
+    for (const a of solicitantes) {
+      if (Number(a.users_id)) {
+        resueltos.push(await this.resolverUsuario(a.users_id, a.alternative_email));
+      } else {
+        resueltos.push({ users_id: 0, email: a.alternative_email, name: null });
+      }
+    }
+    return resueltos;
+  }
+
+  /** El solicitante principal: el primero que devuelve GLPI. */
+  async getRequester(ticketId, ticket) {
+    const todos = await this.getRequesters(ticketId, ticket);
+    return todos[0] || { users_id: 0, email: null, name: null };
   }
 
   async getAssignedTechnician(ticketId) {

@@ -7,7 +7,7 @@ import { glpiHtmlToSlack, extractGlpiDocIds } from './format.js';
 import {
   ensureConversation, postToConversation, cleanupConversation, uploadDocuments,
   updateMessage, followupBlocks, closureBlocks, ticketOpenedBlocks, historyBlocks,
-  notificationText, findSlackUserByEmail, COLORES,
+  deletedTicketBlocks, notificationText, findSlackUserByEmail, COLORES,
 } from './slack.js';
 
 /**
@@ -73,14 +73,27 @@ async function crearConversacion(client, ticket) {
     }
   }
 
-  const requester = await glpi.getRequester(ticket.id, ticket);
+  let requesters = await glpi.getRequesters(ticket.id, ticket);
 
-  // Interruptor de seguridad para pruebas: si hay lista blanca y el solicitante
-  // no esta en ella, el ticket se ignora por completo (no se le escribe a nadie).
+  // Interruptor de seguridad para pruebas: con lista blanca activa, el ticket
+  // solo se atiende si algun solicitante esta en ella, y ademas solo se invita
+  // a los que esten: un ticket compartido no arrastra a gente fuera del piloto.
   const allow = config.allowedRequesterEmails;
-  if (allow.length > 0 && !allow.includes(String(requester.email || '').toLowerCase())) {
-    log.debug(`Ticket ${ticket.id}: solicitante fuera de la lista blanca, omitido`);
-    return { conversation: null, motivo: 'not-allowed' };
+  if (allow.length > 0) {
+    const permitidos = requesters.filter(
+      (r) => allow.includes(String(r.email || '').toLowerCase()),
+    );
+    if (permitidos.length === 0) {
+      log.debug(`Ticket ${ticket.id}: ningun solicitante en la lista blanca, omitido`);
+      return { conversation: null, motivo: 'not-allowed' };
+    }
+    if (permitidos.length < requesters.length) {
+      log.info(
+        `Ticket ${ticket.id}: ${requesters.length - permitidos.length} solicitante(s) `
+        + 'fuera de la lista blanca no entran al canal',
+      );
+    }
+    requesters = permitidos;
   }
 
   let technician = null;
@@ -91,7 +104,7 @@ async function crearConversacion(client, ticket) {
     }
   }
 
-  const conversation = await ensureConversation(client, { ticket, requester, technician });
+  const conversation = await ensureConversation(client, { ticket, requesters, technician });
   return { conversation, motivo: conversation ? null : 'no-slack-user' };
 }
 
@@ -305,6 +318,47 @@ async function handleClosure(client, ticket, conversation) {
   log.info(`Ticket ${ticket.id} cerrado; limpieza programada para ${due}`);
 }
 
+/**
+ * Un ticket borrado desaparece de la busqueda de GLPI y su GET devuelve 404, asi
+ * que el sondeo normal no vuelve a verlo nunca: el canal se quedaria abierto
+ * para siempre. Este barrido repasa lo que tenemos abierto y lo comprueba uno a
+ * uno. De paso recoge cierres que se hayan escapado por cualquier motivo.
+ */
+async function barrerConversacionesAbiertas(client) {
+  const activas = store.listActiveConversations().filter((c) => !c.cleanup_at);
+  if (activas.length === 0) return;
+
+  log.debug(`Barrido: repasando ${activas.length} conversacion(es) abiertas`);
+  for (const conversation of activas) {
+    let ticket = null;
+    try {
+      ticket = await glpi.getTicket(conversation.ticket_id);
+    } catch (err) {
+      if (err.status !== 404) {
+        log.warn(`Barrido: no se pudo consultar el ticket ${conversation.ticket_id}: ${err.message}`);
+        continue;
+      }
+    }
+
+    const borrado = !ticket || Number(ticket.is_deleted) === 1;
+    if (borrado) {
+      log.warn(`Ticket ${conversation.ticket_id} eliminado en GLPI: se cierra su conversacion`);
+      await postToConversation(client, conversation, {
+        text: `El ticket #${conversation.ticket_id} ha sido eliminado`,
+        color: COLORES.cierre,
+        blocks: deletedTicketBlocks(conversation.ticket_id),
+      }).catch(() => {});
+      await cleanupConversation(client, store.getConversationByTicket(conversation.ticket_id));
+      continue;
+    }
+
+    if (CLOSED_STATUSES.includes(Number(ticket.status))) {
+      log.warn(`Ticket ${ticket.id} estaba cerrado y no se detecto en su momento`);
+      await handleClosure(client, ticket, conversation);
+    }
+  }
+}
+
 async function runCleanups(client) {
   const due = store.listDueCleanups(new Date().toISOString());
   for (const conversation of due) {
@@ -349,6 +403,18 @@ export async function pollOnce(client) {
     } catch (err) {
       fallos += 1;
       log.error(`Error procesando el ticket ${ref.id}:`, err.message, err.body ?? '');
+    }
+  }
+
+  // El barrido es caro (una llamada por conversacion abierta), asi que no va en
+  // cada ciclo sino cada SWEEP_INTERVAL_MINUTES.
+  if (config.sweepIntervalMinutes > 0) {
+    const ultimo = Number(store.getKv('last_sweep') || 0);
+    if (Date.now() - ultimo > config.sweepIntervalMinutes * 60000) {
+      store.setKv('last_sweep', String(Date.now()));
+      await barrerConversacionesAbiertas(client).catch(
+        (err) => log.error('Fallo en el barrido de conversaciones:', err.message),
+      );
     }
   }
 

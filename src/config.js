@@ -42,6 +42,9 @@ export const config = {
   // Si el puente ha estado caido mas de estas horas, el cursor se reinicia a
   // "ahora" en vez de procesar la avalancha acumulada. 0 = sin limite.
   maxCatchupHours: int(process.env.MAX_CATCHUP_HOURS, 0),
+  // Cada cuanto se repasan las conversaciones abiertas para detectar tickets
+  // borrados o cierres que se hayan escapado. 0 = desactivado.
+  sweepIntervalMinutes: int(process.env.SWEEP_INTERVAL_MINUTES, 10),
   // archive = solo archivar (el usuario aun lo encuentra en "canales archivados")
   // purge   = borrar mensajes del bot + EXPULSAR a los miembros + archivar  <- desaparece
   // delete  = purge + admin.conversations.delete (solo Enterprise Grid)

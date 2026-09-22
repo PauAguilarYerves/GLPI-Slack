@@ -82,12 +82,18 @@ async function findPrivateChannelByName(client, name) {
  * Modo 'channel': canal privado dedicado -> se puede archivar al cerrar.
  * Modo 'dm': conversacion directa -> solo se pueden borrar los mensajes del bot.
  */
-export async function ensureConversation(client, { ticket, requester, technician }) {
+export async function ensureConversation(client, { ticket, requesters, technician }) {
   const existing = store.getConversationByTicket(ticket.id);
   if (existing && !existing.cleaned_at) return existing;
 
+  const solicitantes = requesters.filter((r) => r.email);
+  const requester = solicitantes[0] || requesters[0] || { users_id: 0, email: null };
+
   if (config.dryRun) {
-    log.info(`[DRY RUN] Crearia conversacion para el ticket ${ticket.id} -> ${requester.email}`);
+    log.info(
+      `[DRY RUN] Crearia conversacion para el ticket ${ticket.id} -> `
+      + solicitantes.map((r) => r.email).join(', '),
+    );
     store.reopenConversation(ticket.id);
     return store.saveConversation({
       ticket_id: ticket.id,
@@ -99,11 +105,18 @@ export async function ensureConversation(client, { ticket, requester, technician
     });
   }
 
-  const slackUserId = await findSlackUserByEmail(client, requester.email);
-  if (!slackUserId) {
-    log.warn(`Ticket ${ticket.id}: sin usuario Slack para ${requester.email || 'email desconocido'}`);
+  // Todos los solicitantes entran al canal, no solo el primero.
+  const slackIds = [];
+  for (const r of solicitantes) {
+    const id = await findSlackUserByEmail(client, r.email);
+    if (id) slackIds.push(id);
+    else log.warn(`Ticket ${ticket.id}: sin usuario Slack para ${r.email}`);
+  }
+  if (slackIds.length === 0) {
+    log.warn(`Ticket ${ticket.id}: ningun solicitante tiene cuenta de Slack`);
     return null;
   }
+  const slackUserId = slackIds[0];
 
   if (config.mode === 'dm') {
     const im = await client.conversations.open({ users: slackUserId });
@@ -151,7 +164,7 @@ export async function ensureConversation(client, { ticket, requester, technician
     }
   }
 
-  const invitees = [slackUserId];
+  const invitees = [...new Set(slackIds)];
   if (config.inviteTechnician && technician?.slackUserId) invitees.push(technician.slackUserId);
   await client.conversations.invite({ channel: channelId, users: invitees.join(',') })
     .catch((err) => {
@@ -609,6 +622,20 @@ export async function avisarSoporte(client, { tecnicoSlackId, texto, blocks }) {
       }
     }
   }
+}
+
+/** El ticket ya no existe en GLPI: alguien lo borro. */
+export function deletedTicketBlocks(ticketId) {
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `:wastebasket:  *Ticket eliminado*\n\`#${ticketId}\` ya no existe en GLPI, `
+          + 'así que esta conversación se cierra.',
+      },
+    },
+  ];
 }
 
 /** Aviso al equipo: un ticket que dabais por cerrado vuelve a estar vivo. */

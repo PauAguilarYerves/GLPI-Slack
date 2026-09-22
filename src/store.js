@@ -105,6 +105,15 @@ export function getHeartbeat() {
   return db.prepare('SELECT v FROM kv WHERE k = ?').get('heartbeat')?.v || null;
 }
 
+/** Acceso generico al almacen clave/valor. */
+export function getKv(clave) {
+  return db.prepare('SELECT v FROM kv WHERE k = ?').get(clave)?.v || null;
+}
+export function setKv(clave, valor) {
+  db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v')
+    .run(clave, valor);
+}
+
 export function getActivatedAt() {
   const row = db.prepare('SELECT v FROM kv WHERE k = ?').get('activated_at');
   return row?.v || null;
