@@ -1,0 +1,32 @@
+services:
+  glpi-slack-bridge:
+    build: .
+    image: glpi-slack-bridge:latest
+    container_name: glpi-slack-bridge
+    restart: unless-stopped
+
+    # Todos los secretos y la configuracion salen del .env del host.
+    # No se publica ningun puerto: con Socket Mode el puente solo abre
+    # conexiones salientes, hacia Slack y hacia GLPI.
+    env_file: .env
+
+    environment:
+      # Ajustala a la del servidor de GLPI.
+      TZ: ${TZ:-Europe/Madrid}
+      # Dentro del contenedor la BD siempre va al volumen, ignorando el .env.
+      DB_PATH: /app/data/bridge.sqlite
+
+    volumes:
+      # El cursor y el mapa ticket<->canal viven aqui. Si se pierde este
+      # volumen, el puente arranca de cero: no reenvia nada antiguo, pero
+      # deja huerfanas las conversaciones abiertas.
+      - bridge-data:/app/data
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  bridge-data:

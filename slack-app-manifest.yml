@@ -1,0 +1,35 @@
+# Slack > Your Apps > Create New App > From an app manifest > pegar esto
+display_information:
+  name: GLPI Soporte
+  description: Puente bidireccional entre GLPI y Slack para seguimientos de tickets
+  background_color: "#1f2d3d"
+features:
+  bot_user:
+    display_name: GLPI
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write          # publicar y borrar mensajes propios
+      - groups:write        # crear, invitar, EXPULSAR y archivar canales privados
+      - groups:history      # leer mensajes de los canales privados del bot
+      - groups:read         # listar canales privados y sus miembros
+      - im:write            # abrir DMs (solo si CONVERSATION_MODE=dm)
+      - im:history          # leer DMs
+      - im:read
+      - users:read          # nombre real del autor de la respuesta
+      - users:read.email    # users.lookupByEmail: email GLPI -> usuario Slack
+      - reactions:write     # acuse de recibo con ✅
+      - files:write         # subir a Slack los adjuntos de GLPI, y borrarlos al cerrar
+      - files:read          # descargar los ficheros que sube el usuario, para llevarlos a GLPI
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.groups      # respuestas en canales privados por ticket
+      - message.im          # respuestas en DM
+      - member_joined_channel  # vigilar quien entra en los canales de ticket
+  interactivity:
+    is_enabled: true      # necesario para REPLY_MODE=modal (boton + ventana)
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
