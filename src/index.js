@@ -320,6 +320,33 @@ app.event('member_joined_channel', async ({ event, client }) => {
 });
 
 let pollTimer;
+let watchdogTimer;
+
+/**
+ * Un sondeo colgado deja el puente vivo pero inutil: el contenedor sigue
+ * "arrancado" y nadie se entera. Docker solo reinicia procesos muertos, no
+ * procesos quietos, asi que si no hay progreso durante un rato nos morimos a
+ * proposito y que nos levante el supervisor.
+ */
+function arrancarWatchdog() {
+  if (config.watchdogMinutes <= 0) return null;
+  const limite = config.watchdogMinutes * 60000;
+
+  const timer = setInterval(() => {
+    const latido = store.getHeartbeat();
+    if (!latido) return;
+    const parado = Date.now() - new Date(latido).getTime();
+    if (parado > limite) {
+      log.error(
+        `El sondeo lleva ${Math.round(parado / 60000)} min sin dar senales de vida `
+        + `(limite ${config.watchdogMinutes} min). Se cierra el proceso para que lo reinicien.`,
+      );
+      process.exit(1);
+    }
+  }, 60000);
+  timer.unref();
+  return timer;
+}
 
 async function main() {
   await glpi.initSession();
@@ -330,11 +357,13 @@ async function main() {
     `limpieza=${config.cleanupMode}, socket=${config.slack.socketMode})`,
   );
   pollTimer = startPolling(app.client);
+  watchdogTimer = arrancarWatchdog();
 }
 
 async function shutdown(signal) {
   log.info(`${signal} recibido, cerrando...`);
   clearInterval(pollTimer);
+  if (watchdogTimer) clearInterval(watchdogTimer);
   await app.stop().catch(() => {});
   await glpi.killSession().catch(() => {});
   process.exit(0);

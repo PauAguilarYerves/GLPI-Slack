@@ -381,6 +381,9 @@ export async function pollOnce(client) {
   let fallos = 0;
   for (const ref of changed) {
     try {
+      // El latido marca progreso, no fin de ciclo: una puesta al dia larga es
+      // legitima y no debe parecer un cuelgue.
+      store.setHeartbeat();
       const ticket = await glpi.getTicket(ref.id);
       if (!ticket?.id) continue;
       const status = Number(ticket.status);

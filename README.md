@@ -344,6 +344,7 @@ compañeros → vaciar la lista.
 | `POLL_OVERLAP_SECONDS` | `60` | Solape del cursor, para absorber desfases de reloj |
 | `MAX_CATCHUP_HOURS` | `0` | Si el puente ha estado parado más de esto, no recupera lo acumulado. `0` = sin límite |
 | `SWEEP_INTERVAL_MINUTES` | `10` | Cada cuánto se repasan las conversaciones abiertas para detectar tickets eliminados en GLPI. `0` = desactivado |
+| `WATCHDOG_MINUTES` | `5` | Si el sondeo deja de progresar durante este tiempo, el proceso se cierra solo para que el supervisor lo reinicie. `0` = desactivado |
 | `ALLOWED_REQUESTER_EMAILS` | vacío | Lista blanca de solicitantes. Vacío = todos |
 | `DRY_RUN` | `false` | Solo registra en el log lo que haría |
 | `ONLY_TICKETS_CREATED_AFTER_ACTIVATION` | `false` | `true` ignora los tickets anteriores a la activación aunque tengan actividad nueva |
@@ -435,8 +436,11 @@ docker compose exec glpi-slack-bridge node src/tools/preflight.js
 docker compose restart          # tras cambiar el .env
 ```
 
-El contenedor lleva un **healthcheck**: el sondeo deja un latido en la base de datos en cada
-ciclo y, si deja de latir más de tres ciclos, Docker lo marca como `unhealthy`.
+**Cómo se recupera solo de un cuelgue.** El sondeo deja un latido en la base de datos cada vez
+que avanza. El **healthcheck** marca el contenedor como `unhealthy` si se enfría, y el
+**watchdog** interno cierra el proceso si no hay progreso durante `WATCHDOG_MINUTES`, que es
+lo que de verdad lo recupera: `restart: unless-stopped` solo reacciona ante procesos muertos,
+nunca ante procesos quietos.
 
 ---
 

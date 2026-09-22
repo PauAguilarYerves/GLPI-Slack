@@ -45,6 +45,10 @@ export const config = {
   // Cada cuanto se repasan las conversaciones abiertas para detectar tickets
   // borrados o cierres que se hayan escapado. 0 = desactivado.
   sweepIntervalMinutes: int(process.env.SWEEP_INTERVAL_MINUTES, 10),
+  // Si el sondeo deja de dar senales de vida durante estos minutos, el proceso
+  // se suicida para que el supervisor (Docker, systemd) lo levante de nuevo.
+  // 0 = desactivado.
+  watchdogMinutes: int(process.env.WATCHDOG_MINUTES, 5),
   // archive = solo archivar (el usuario aun lo encuentra en "canales archivados")
   // purge   = borrar mensajes del bot + EXPULSAR a los miembros + archivar  <- desaparece
   // delete  = purge + admin.conversations.delete (solo Enterprise Grid)
