@@ -50,6 +50,10 @@ async function publicar(texto, blocks, color) {
 export async function alerta(tipo, titulo, detalle = null) {
   log.error(`[alerta:${tipo}] ${titulo}${detalle ? ` — ${detalle}` : ''}`);
 
+  // Sin canal configurado no se apunta nada: si se guardara el enfriamiento,
+  // al configurarlo despues el primer aviso quedaria silenciado sin motivo.
+  if (!config.alertChannel || !cliente) return;
+
   const clave = claveDe(tipo);
   const estado = JSON.parse(store.getKv(clave) || 'null');
   const ahora = Date.now();
