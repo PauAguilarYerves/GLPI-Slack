@@ -432,8 +432,9 @@ el volumen de datos es `glpi-slack-bridge_bridge-data`.
 
 ```bash
 docker compose logs -f
-docker compose exec glpi-slack-bridge node src/tools/preflight.js
-docker compose restart          # tras cambiar el .env
+docker compose run --rm glpi-slack-bridge node src/tools/preflight.js    # verificar
+docker compose run --rm glpi-slack-bridge node src/tools/test-alert.js   # probar el canal de alertas
+docker compose up -d            # tras cambiar el .env
 ```
 
 **Cómo se recupera solo de un cuelgue.** El sondeo deja un latido en la base de datos cada vez

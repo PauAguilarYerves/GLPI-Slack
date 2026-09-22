@@ -10,7 +10,8 @@
     "dev": "node --watch src/index.js",
     "cursor:reset": "node src/tools/reset-cursor.js",
     "test": "node test/run-e2e-mock.js",
-    "check": "node src/tools/preflight.js"
+    "check": "node src/tools/preflight.js",
+    "alert:test": "node src/tools/test-alert.js"
   },
   "engines": {
     "node": ">=22.5"
