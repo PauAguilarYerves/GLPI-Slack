@@ -5,6 +5,7 @@ import * as store from './store.js';
 import { glpi, glpiTicketUrl } from './glpi.js';
 import { slackToGlpiHtml } from './format.js';
 import { bootstrapCursor, startPolling } from './poller.js';
+import { configurarAlertas, alerta } from './alerts.js';
 import {
   REPLY_ACTION_ID, REPLY_VIEW_ID, OPEN_GLPI_ACTION_ID, downloadSlackFile,
   postToConversation, reopenedBlocks, avisarSoporte, avisoReaperturaBlocks,
@@ -352,6 +353,19 @@ async function main() {
   await glpi.initSession();
   bootstrapCursor();
   await app.start(config.slack.socketMode ? undefined : config.slack.port);
+  configurarAlertas(app.client);
+
+  // Si la parada anterior no fue limpia, alguien deberia enterarse: significa
+  // que el proceso murio o que el watchdog tuvo que matarlo.
+  if (store.getKv('parada_limpia') !== 'si') {
+    await alerta(
+      'arranque-sucio',
+      'El puente ha arrancado tras una parada no limpia',
+      'El proceso anterior no se cerro ordenadamente: pudo caerse o lo mato el watchdog '
+      + 'por quedarse colgado. Revisa el log si se repite.',
+    );
+  }
+  store.setKv('parada_limpia', 'no');
   log.info(
     `Puente GLPI<->Slack activo (conversacion=${config.mode}, respuesta=${config.replyMode}, ` +
     `limpieza=${config.cleanupMode}, socket=${config.slack.socketMode})`,
@@ -362,6 +376,7 @@ async function main() {
 
 async function shutdown(signal) {
   log.info(`${signal} recibido, cerrando...`);
+  store.setKv('parada_limpia', 'si');
   clearInterval(pollTimer);
   if (watchdogTimer) clearInterval(watchdogTimer);
   await app.stop().catch(() => {});

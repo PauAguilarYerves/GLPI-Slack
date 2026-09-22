@@ -107,6 +107,21 @@ if (config.allowedRequesterEmails.length === 0) {
   }
 }
 
+if (botUserId) {
+  console.log('\n── Canal de alertas ──');
+  if (!config.alertChannel) {
+    nota('ALERT_CHANNEL vacio: los fallos del puente solo quedan en el log');
+  } else {
+    try {
+      const info = await web.conversations.info({ channel: config.alertChannel });
+      if (info.channel?.is_member) ok(`el bot puede publicar en #${info.channel.name}`);
+      else ko(`el bot NO esta en #${info.channel.name}: invitalo con /invite @GLPI`);
+    } catch (err) {
+      ko(`no se puede usar ALERT_CHANNEL: ${err?.data?.error}`);
+    }
+  }
+}
+
 console.log('\n── Configuracion ──');
 console.log(`  conversacion=${config.mode}  respuesta=${config.replyMode}  limpieza=${config.cleanupMode}`);
 console.log(`  DRY_RUN=${config.dryRun}  sondeo=${config.pollIntervalMs / 1000}s  BD=${config.dbPath}`);

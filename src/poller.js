@@ -3,6 +3,7 @@ import { config, CLOSED_STATUSES } from './config.js';
 import { log } from './log.js';
 import * as store from './store.js';
 import { glpi, glpiDateToIso, glpiTicketUrl as ticketUrl } from './glpi.js';
+import { alerta, recuperado } from './alerts.js';
 import { glpiHtmlToSlack, extractGlpiDocIds } from './format.js';
 import {
   ensureConversation, postToConversation, cleanupConversation, uploadDocuments,
@@ -105,6 +106,15 @@ async function crearConversacion(client, ticket) {
   }
 
   const conversation = await ensureConversation(client, { ticket, requesters, technician });
+  if (!conversation) {
+    const correos = requesters.map((r) => r.email || '(sin correo)').join(', ');
+    await alerta(
+      `sin-slack:${correos}`,
+      'Un usuario no recibe sus tickets en Slack',
+      `El ticket #${ticket.id} tiene como solicitante a ${correos}, que no corresponde con `
+      + 'ninguna cuenta de Slack. Esa persona no se enterará de las respuestas.',
+    );
+  }
   return { conversation, motivo: conversation ? null : 'no-slack-user' };
 }
 
@@ -116,7 +126,11 @@ async function enviarAdjuntos(client, conversation, docIds, ticketId) {
     try {
       documentos.push(await glpi.downloadDocument(id));
     } catch (err) {
-      log.warn(`No se pudo descargar el documento ${id} del ticket ${ticketId}: ${err.message}`);
+      await alerta(
+        'adjunto-glpi',
+        'No se pudo llevar un adjunto de GLPI a Slack',
+        `Documento ${id} del ticket #${ticketId}: ${err.message}`,
+      );
     }
   }
   await uploadDocuments(client, conversation, documentos);
@@ -448,8 +462,13 @@ export function startPolling(client) {
     running = true;
     try {
       await pollOnce(client);
+      await recuperado('sondeo', 'El puente vuelve a hablar con GLPI');
     } catch (err) {
-      log.error('Fallo en el ciclo de sondeo:', err.message, err.body ?? '');
+      await alerta(
+        'sondeo',
+        'El puente no puede consultar GLPI',
+        `${err.message}. Mientras dure, nadie recibe respuestas en Slack.`,
+      );
     } finally {
       running = false;
     }

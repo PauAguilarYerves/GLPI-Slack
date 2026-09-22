@@ -49,6 +49,11 @@ export const config = {
   // se suicida para que el supervisor (Docker, systemd) lo levante de nuevo.
   // 0 = desactivado.
   watchdogMinutes: int(process.env.WATCHDOG_MINUTES, 5),
+  // Canal privado donde el puente avisa de sus propios fallos. Vacio = solo log.
+  alertChannel: process.env.ALERT_CHANNEL || '',
+  // Un mismo tipo de fallo no se repite antes de estos minutos: con el sondeo a
+  // 5 segundos, publicar cada error convertiria el canal en ruido inservible.
+  alertCooldownMinutes: int(process.env.ALERT_COOLDOWN_MINUTES, 30),
   // archive = solo archivar (el usuario aun lo encuentra en "canales archivados")
   // purge   = borrar mensajes del bot + EXPULSAR a los miembros + archivar  <- desaparece
   // delete  = purge + admin.conversations.delete (solo Enterprise Grid)

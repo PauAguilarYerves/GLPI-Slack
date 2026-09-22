@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { log } from './log.js';
 import * as store from './store.js';
 import { truncate, escapeSlack } from './format.js';
+import { alerta } from './alerts.js';
 
 // Token de organizacion (Enterprise Grid) para el borrado real del canal.
 const adminClient = config.slack.adminToken ? new WebClient(config.slack.adminToken) : null;
@@ -191,10 +192,16 @@ export async function ensureConversation(client, { ticket, requesters, technicia
 }
 
 /** Publica y recuerda el ts, para poder borrar el mensaje al cerrar el ticket. */
-/** Envuelve los bloques en un adjunto de color, si esta activado. */
-function conColor(blocks, color) {
-  if (!color || !config.messageColors) return { blocks };
-  return { attachments: [{ color, blocks, fallback: '' }] };
+/**
+ * Envuelve los bloques en un adjunto de color, si esta activado.
+ *
+ * El texto de la notificacion NO puede ir ademas como `text`: Slack lo pintaria
+ * encima del adjunto y saldria duplicado. Dentro del adjunto va como `fallback`,
+ * que es lo que usa el aviso del movil.
+ */
+function conColor(blocks, color, texto) {
+  if (!color || !config.messageColors) return { blocks, text: truncate(texto) };
+  return { attachments: [{ color, blocks, fallback: truncate(texto) }] };
 }
 
 export async function postToConversation(client, conversation, { text, blocks, color, threadTs }) {
@@ -205,8 +212,7 @@ export async function postToConversation(client, conversation, { text, blocks, c
   }
   const res = await client.chat.postMessage({
     channel: conversation.channel_id,
-    text: truncate(text),
-    ...conColor(blocks, color),
+    ...conColor(blocks, color, text),
     thread_ts: threadTs || (config.mode === 'dm' ? conversation.root_ts : undefined),
     unfurl_links: false,
     unfurl_media: false,
@@ -282,10 +288,12 @@ async function kickMembers(client, conversation) {
       const code = err?.data?.error;
       if (['cant_kick_self', 'not_in_channel', 'user_not_found'].includes(code)) continue;
       if (code === 'restricted_action') {
-        log.error(
-          `No se pudo expulsar a ${user} del canal ${conversation.channel_id}: la configuracion ` +
-          'del workspace restringe quien puede retirar miembros de canales privados. ' +
-          'Ajustalo en Settings & administration > Workspace settings > Permissions.',
+        await alerta(
+          'permisos-expulsar',
+          'No se pueden cerrar los canales de los tickets resueltos',
+          'El workspace restringe quién puede retirar miembros de canales privados, así que '
+          + 'los usuarios siguen viendo conversaciones de tickets ya cerrados. Se ajusta en '
+          + 'Settings & administration → Workspace settings → Permissions.',
         );
         continue;
       }
@@ -321,9 +329,10 @@ export async function uploadDocuments(client, conversation, documentos) {
     } catch (err) {
       const code = err?.data?.error;
       if (code === 'missing_scope') {
-        log.error(
-          'Falta el permiso files:write en la app de Slack: los adjuntos de GLPI no se pueden subir. ' +
-          'Añadelo en OAuth & Permissions y reinstala la app.',
+        await alerta(
+          'permisos-ficheros',
+          'Falta el permiso files:write en la app de Slack',
+          'Los adjuntos de GLPI no se pueden subir. Añádelo en OAuth & Permissions y reinstala la app.',
         );
       } else {
         log.warn(`No se pudo subir ${doc.filename}: ${code || err.message}`);
@@ -431,7 +440,7 @@ export async function updateMessage(client, { channelId, ts, text, blocks, color
     return;
   }
   await client.chat.update({
-    channel: channelId, ts, text: truncate(text), ...conColor(blocks, color),
+    channel: channelId, ts, ...conColor(blocks, color, text),
   });
 }
 

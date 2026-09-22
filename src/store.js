@@ -114,6 +114,10 @@ export function setKv(clave, valor) {
     .run(clave, valor);
 }
 
+export function deleteKv(clave) {
+  db.prepare('DELETE FROM kv WHERE k = ?').run(clave);
+}
+
 export function getActivatedAt() {
   const row = db.prepare('SELECT v FROM kv WHERE k = ?').get('activated_at');
   return row?.v || null;
