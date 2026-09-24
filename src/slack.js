@@ -2,7 +2,7 @@ import { WebClient } from '@slack/web-api';
 import { config } from './config.js';
 import { log } from './log.js';
 import * as store from './store.js';
-import { truncate, escapeSlack } from './format.js';
+import { truncate, escapeSlack, glpiHtmlToSlack as glpiHtmlToSlackSeguro } from './format.js';
 import { alerta } from './alerts.js';
 
 // Token de organizacion (Enterprise Grid) para el borrado real del canal.
@@ -49,6 +49,24 @@ export function channelNameForTicket(ticketId, title, { reapertura = 0 } = {}) {
   return cola
     ? `${config.channelPrefix}${cola}${sufijo}`
     : `${config.channelPrefix}${ticketId}${reabierto}`;
+}
+
+// El email de una persona no cambia entre sondeos: se cachea para no gastar
+// llamadas a users.lookupByEmail, que tiene limite de 50 por minuto.
+const cacheSlackIds = new Map();
+
+/** Resuelve una lista de correos a IDs de Slack, saltandose los que no existan. */
+export async function resolverDestinatarios(client, correos) {
+  const ids = [];
+  for (const correo of correos) {
+    if (!cacheSlackIds.has(correo)) {
+      cacheSlackIds.set(correo, await findSlackUserByEmail(client, correo).catch(() => null));
+    }
+    const id = cacheSlackIds.get(correo);
+    if (id) ids.push(id);
+    else log.warn(`Aviso al equipo: ${correo} no tiene cuenta de Slack`);
+  }
+  return ids;
 }
 
 export async function findSlackUserByEmail(client, email) {
@@ -191,6 +209,54 @@ export async function ensureConversation(client, { ticket, requesters, technicia
   return store.getConversationByTicket(ticket.id);
 }
 
+/**
+ * Slack archiva un canal privado cuando se queda sin miembros humanos, y sobre
+ * un canal archivado no se puede ni invitar ni publicar. Si el ticket sigue
+ * vivo, el canal tiene que volver a estarlo.
+ *
+ * Ejecuta la accion y, si falla por archivado, desarchiva y reintenta una vez.
+ */
+async function conCanalVivo(client, channelId, accion) {
+  try {
+    return await accion();
+  } catch (err) {
+    if (err?.data?.error !== 'is_archived') throw err;
+    log.info(`Canal ${channelId} archivado y el ticket sigue abierto: desarchivando`);
+    await client.conversations.unarchive({ channel: channelId }).catch((e) => {
+      if (e?.data?.error !== 'not_archived') throw e;
+    });
+    return accion();
+  }
+}
+
+/**
+ * Se asegura de que siga en el canal todo el que el puente invito. Alguien pudo
+ * salirse —o le sacaron— con el ticket aun abierto, y entonces las respuestas
+ * del tecnico caerian en un canal que esa persona ya no ve.
+ *
+ * Se invita directamente en vez de listar los miembros primero: si ya esta
+ * dentro, Slack responde `already_in_channel` y no hay nada que hacer. Una
+ * llamada en vez de dos.
+ */
+export async function asegurarMiembros(client, conversation) {
+  if (!config.reinviteOnReply || config.mode !== 'channel' || config.dryRun) return;
+
+  for (const { user_id: userId } of store.listInvited(conversation.channel_id)) {
+    try {
+      await conCanalVivo(client, conversation.channel_id, () =>
+        client.conversations.invite({ channel: conversation.channel_id, users: userId }));
+      log.info(
+        `Ticket ${conversation.ticket_id}: ${userId} se habia salido del canal `
+        + 'y se le ha vuelto a invitar',
+      );
+    } catch (err) {
+      const code = err?.data?.error;
+      if (['already_in_channel', 'cant_invite_self'].includes(code)) continue;
+      log.warn(`No se pudo reinvitar a ${userId} al ticket ${conversation.ticket_id}: ${code}`);
+    }
+  }
+}
+
 /** Publica y recuerda el ts, para poder borrar el mensaje al cerrar el ticket. */
 /**
  * Envuelve los bloques en un adjunto de color, si esta activado.
@@ -210,13 +276,14 @@ export async function postToConversation(client, conversation, { text, blocks, c
     log.info(`[DRY RUN] Publicaria en el ticket ${conversation.ticket_id}: ${String(cuerpo).slice(0, 300)}`);
     return null;
   }
-  const res = await client.chat.postMessage({
-    channel: conversation.channel_id,
-    ...conColor(blocks, color, text),
-    thread_ts: threadTs || (config.mode === 'dm' ? conversation.root_ts : undefined),
-    unfurl_links: false,
-    unfurl_media: false,
-  });
+  const res = await conCanalVivo(client, conversation.channel_id, () =>
+    client.chat.postMessage({
+      channel: conversation.channel_id,
+      ...conColor(blocks, color, text),
+      thread_ts: threadTs || (config.mode === 'dm' ? conversation.root_ts : undefined),
+      unfurl_links: false,
+      unfurl_media: false,
+    }));
   store.rememberBotMessage(conversation.ticket_id, conversation.channel_id, res.ts);
   if (!conversation.root_ts) {
     store.saveConversation({ ...conversation, root_ts: res.ts });
@@ -307,7 +374,7 @@ async function kickMembers(client, conversation) {
  * Sube a la conversacion los adjuntos que venian con el seguimiento de GLPI.
  * Se registran para poder borrarlos al cerrar el ticket.
  */
-export async function uploadDocuments(client, conversation, documentos) {
+export async function uploadDocuments(client, conversation, documentos, followupId = null) {
   for (const doc of documentos) {
     if (config.dryRun) {
       log.info(`[DRY RUN] Subiria ${doc.filename} (${doc.buffer.length} bytes) al ticket ${conversation.ticket_id}`);
@@ -322,8 +389,10 @@ export async function uploadDocuments(client, conversation, documentos) {
       });
       for (const f of res.files || []) {
         const id = f.id || f.files?.[0]?.id;
-        if (id) store.rememberBotFile(conversation.ticket_id, id);
-        for (const sub of f.files || []) if (sub.id) store.rememberBotFile(conversation.ticket_id, sub.id);
+        if (id) store.rememberBotFile(conversation.ticket_id, id, followupId);
+        for (const sub of f.files || []) {
+          if (sub.id) store.rememberBotFile(conversation.ticket_id, sub.id, followupId);
+        }
       }
       log.info(`Ticket ${conversation.ticket_id}: adjunto ${doc.filename} subido a Slack`);
     } catch (err) {
@@ -412,6 +481,7 @@ export async function cleanupConversation(client, conversation) {
 export const REPLY_ACTION_ID = 'glpi_reply_open';
 export const REPLY_VIEW_ID = 'glpi_reply_submit';
 export const OPEN_GLPI_ACTION_ID = 'glpi_open_ticket';
+export const REOPEN_ACTION_ID = 'glpi_reopen_ticket';
 
 /** Texto de la notificacion push: es lo unico que se lee en el movil. */
 /** Descarga un fichero de Slack usando el token del bot. */
@@ -431,6 +501,38 @@ export async function downloadSlackFile(file) {
 export function notificationText(ticket, authorName) {
   const quien = authorName ? ` de ${authorName}` : '';
   return `Nueva respuesta${quien} en tu ticket #${ticket.id} — ${ticket.name || ''}`.trim();
+}
+
+/**
+ * Retira de Slack un mensaje ya publicado y los ficheros que lo acompanaban.
+ * Se usa cuando el tecnico oculta o borra el seguimiento en GLPI: si alli ha
+ * dejado de ser visible, aqui tampoco debe estarlo.
+ */
+export async function retirarMensaje(client, { channelId, ts, followupId }) {
+  if (config.dryRun) {
+    log.info(`[DRY RUN] Retiraria el mensaje ${ts} de ${channelId}`);
+    return;
+  }
+
+  try {
+    await client.chat.delete({ channel: channelId, ts });
+  } catch (err) {
+    const code = err?.data?.error;
+    if (!['message_not_found', 'channel_not_found'].includes(code)) {
+      log.warn(`No se pudo retirar el mensaje ${ts}: ${code}`);
+    }
+  }
+  store.forgetBotMessage(channelId, ts);
+
+  for (const { file_id: fileId } of store.listBotFilesByFollowup(followupId)) {
+    await client.files.delete({ file: fileId }).catch((err) => {
+      const code = err?.data?.error;
+      if (!['file_not_found', 'file_deleted'].includes(code)) {
+        log.warn(`No se pudo retirar el fichero ${fileId}: ${code}`);
+      }
+    });
+    store.forgetBotFile(fileId);
+  }
 }
 
 /** Reescribe un mensaje ya publicado (cuando el tecnico edita el seguimiento). */
@@ -599,14 +701,18 @@ export function historyBlocks({ ticket, solicitud, anteriores, total, glpiTicket
  * Intenta primero el mensaje directo al tecnico asignado; si no hay tecnico o
  * no tiene cuenta de Slack, cae al canal del equipo.
  */
-export async function avisarSoporte(client, { tecnicoSlackId, texto, blocks }) {
+export async function avisarSoporte(client, { tecnicoSlackId, destinatarios, texto, blocks }) {
   const destinos = [];
-  if (config.notifyTechnician && tecnicoSlackId) destinos.push(tecnicoSlackId);
-  if (config.teamChannel && (!tecnicoSlackId || !config.notifyTechnician)) {
-    destinos.push(config.teamChannel);
+  if (destinatarios?.length) {
+    destinos.push(...destinatarios);
+  } else {
+    if (config.notifyTechnician && tecnicoSlackId) destinos.push(tecnicoSlackId);
+    if (config.teamChannel && (!tecnicoSlackId || !config.notifyTechnician)) {
+      destinos.push(config.teamChannel);
+    }
   }
   if (destinos.length === 0) {
-    log.debug('Reapertura sin destinatario en Slack: ni tecnico asignado ni TEAM_CHANNEL');
+    log.debug('Aviso sin destinatario en Slack: ni tecnico asignado, ni lista, ni TEAM_CHANNEL');
     return;
   }
 
@@ -624,7 +730,7 @@ export async function avisarSoporte(client, { tecnicoSlackId, texto, blocks }) {
       if (code === 'not_in_channel' || code === 'channel_not_found') {
         log.error(
           `No se pudo avisar en ${destino}: el bot no esta en ese canal. `
-          + 'Invitalo con /invite @GLPI o corrige TEAM_CHANNEL.',
+          + 'Invitalo con /invite @GLPI TicketBot o corrige TEAM_CHANNEL.',
         );
       } else {
         log.warn(`No se pudo avisar a ${destino}: ${code || err.message}`);
@@ -645,6 +751,77 @@ export function deletedTicketBlocks(ticketId) {
       },
     },
   ];
+}
+
+/** Ha entrado un ticket nuevo en GLPI. */
+export function nuevoTicketBlocks({ ticket, solicitante, categoria, glpiTicketUrl }) {
+  const detalles = [
+    solicitante ? `*Solicitante:* ${escapeSlack(solicitante)}` : null,
+    categoria ? `*Categoría:* ${escapeSlack(categoria)}` : null,
+  ].filter(Boolean).join('   ·   ');
+
+  const blocks = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `:inbox_tray:  *Ticket nuevo*\n\`#${ticket.id}\`  ·  `
+          + `*${escapeSlack(ticket.name || 'Sin título')}*`,
+      },
+    },
+  ];
+  if (detalles) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: detalles }] });
+
+  const cuerpo = truncate(glpiHtmlToSlackSeguro(ticket.content), 700);
+  if (cuerpo) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: cuerpo } });
+
+  if (glpiTicketUrl) {
+    blocks.push({
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        action_id: OPEN_GLPI_ACTION_ID,
+        text: { type: 'plain_text', text: 'Abrir en GLPI', emoji: false },
+        url: glpiTicketUrl,
+      }],
+    });
+  }
+  return blocks;
+}
+
+/** Alguien ha respondido en un ticket que tienes asignado. */
+export function respuestaEnTicketBlocks({ ticket, autor, texto, glpiTicketUrl }) {
+  const blocks = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `:speech_balloon:  *Respuesta en tu ticket*\n\`#${ticket.id}\`  ·  `
+          + `${escapeSlack(ticket.name || '')}`,
+      },
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*${escapeSlack(autor || 'El solicitante')}* escribe:\n`
+          + `>${truncate(String(texto || '').replace(/\n/g, '\n>'), 800)}`,
+      },
+    },
+  ];
+  if (glpiTicketUrl) {
+    blocks.push({
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        action_id: OPEN_GLPI_ACTION_ID,
+        style: 'primary',
+        text: { type: 'plain_text', text: 'Responder en GLPI', emoji: false },
+        url: glpiTicketUrl,
+      }],
+    });
+  }
+  return blocks;
 }
 
 /** Aviso al equipo: un ticket que dabais por cerrado vuelve a estar vivo. */
@@ -713,7 +890,7 @@ function describirEspera(ms) {
   return `${horas} ${horas === 1 ? 'hora' : 'horas'}`;
 }
 
-export function closureBlocks({ ticket, solutionText, delayMs }) {
+export function closureBlocks({ ticket, solutionText, delayMs, reabiertoPor = null }) {
   const blocks = [
     {
       type: 'section',
@@ -727,13 +904,33 @@ export function closureBlocks({ ticket, solutionText, delayMs }) {
     blocks.push({ type: 'divider' });
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: truncate(solutionText) } });
   }
+  // Reabrir tiene que ser un acto consciente: por eso un boton, y no el simple
+  // hecho de escribir. Una vez usado, desaparece.
+  if (!reabiertoPor) {
+    blocks.push({
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        action_id: REOPEN_ACTION_ID,
+        style: 'danger',
+        text: { type: 'plain_text', text: 'Sigo con el problema', emoji: false },
+        value: String(ticket.id),
+      }],
+    });
+  }
+
   blocks.push({
     type: 'context',
     elements: [{
       type: 'mrkdwn',
-      text: delayMs > 0
-        ? `Este canal desaparecerá en ${describirEspera(delayMs)}.`
-        : 'Este canal desaparecerá ahora.',
+      text: reabiertoPor
+        ? `:arrows_counterclockwise:  Reabierto por ${escapeSlack(reabiertoPor)}.`
+        : [
+          delayMs > 0
+            ? `Este canal desaparecerá en ${describirEspera(delayMs)}.`
+            : 'Este canal desaparecerá ahora.',
+          'Si el problema sigue, pulsa el botón antes de que se cierre.',
+        ].join(' '),
     }],
   });
   return blocks;

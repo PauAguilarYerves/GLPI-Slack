@@ -1,11 +1,11 @@
 # Slack > Your Apps > Create New App > From an app manifest > pegar esto
 display_information:
-  name: GLPI Soporte
+  name: GLPI TicketBot
   description: Puente bidireccional entre GLPI y Slack para seguimientos de tickets
   background_color: "#1f2d3d"
 features:
   bot_user:
-    display_name: GLPI
+    display_name: GLPI TicketBot
     always_online: true
 oauth_config:
   scopes:

@@ -12,6 +12,7 @@ const res = spawnSync(process.execPath, [new URL('./e2e-mock.mjs', import.meta.u
     GLPI_URL: 'https://glpi.test/apirest.php',
     GLPI_APP_TOKEN: 'test', GLPI_USER_TOKEN: 'test', GLPI_BRIDGE_USER_ID: '99',
     GLPI_PROFILE_ID: '6',
+    ALERT_CHANNEL: 'C_ALERTAS', ALERT_COOLDOWN_MINUTES: '30', STUCK_ALERT_MINUTES: '0',
     SLACK_BOT_TOKEN: 'xoxb-test', SLACK_APP_TOKEN: '',
     DB_PATH: dbPath, LOG_LEVEL: 'info', CLEANUP_MODE: 'purge', CONVERSATION_MODE: 'channel',
     // Explicitos para que un .env real no se cuele en la prueba (dotenv solo

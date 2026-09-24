@@ -7,8 +7,10 @@ import { alerta, recuperado } from './alerts.js';
 import { glpiHtmlToSlack, extractGlpiDocIds } from './format.js';
 import {
   ensureConversation, postToConversation, cleanupConversation, uploadDocuments,
-  updateMessage, followupBlocks, closureBlocks, ticketOpenedBlocks, historyBlocks,
-  deletedTicketBlocks, notificationText, findSlackUserByEmail, COLORES,
+  updateMessage, retirarMensaje, asegurarMiembros, followupBlocks, closureBlocks,
+  ticketOpenedBlocks, historyBlocks, deletedTicketBlocks, notificationText,
+  nuevoTicketBlocks, respuestaEnTicketBlocks, avisarSoporte, resolverDestinatarios,
+  findSlackUserByEmail, COLORES,
 } from './slack.js';
 
 /**
@@ -118,8 +120,78 @@ async function crearConversacion(client, ticket) {
   return { conversation, motivo: conversation ? null : 'no-slack-user' };
 }
 
+/**
+ * Avisa al equipo de cada ticket que entra. Va aparte de la conversacion con el
+ * usuario y NO mira la lista blanca: al equipo le interesan todos los tickets,
+ * no solo los del piloto.
+ */
+async function anunciarTicketNuevo(client, ticket, sinceMs) {
+  if (!config.notifyNewTickets) return;
+  if (config.newTicketRecipients.length === 0 && !config.teamChannel) return;
+  if (store.isTicketAnnounced(ticket.id)) return;
+
+  const creado = glpiDateToIso(ticket.date_creation);
+  if (!creado || new Date(creado).getTime() <= sinceMs) return;   // nada retroactivo
+
+  store.markTicketAnnounced(ticket.id);
+
+  const requesters = await glpi.getRequesters(ticket.id, ticket).catch(() => []);
+  const solicitante = requesters.map((r) => r.name || r.email).filter(Boolean).join(', ');
+
+  await avisarSoporte(client, {
+    destinatarios: await resolverDestinatarios(client, config.newTicketRecipients),
+    texto: `Ticket nuevo #${ticket.id} — ${ticket.name || ''}`.trim(),
+    blocks: nuevoTicketBlocks({
+      ticket, solicitante, categoria: null, glpiTicketUrl: ticketUrl(ticket.id),
+    }),
+  });
+  log.info(`Ticket ${ticket.id} anunciado al equipo`);
+}
+
+/**
+ * Avisa al tecnico asignado de las respuestas que recibe en sus tickets.
+ * Incluye las que llegan desde Slack (autor = la cuenta de servicio), que son
+ * justamente las que antes solo se veian entrando en GLPI.
+ */
+async function avisarTecnicoDeRespuestas(client, ticket, followups, sinceMs) {
+  if (!config.notifyTicketReplies) return;
+
+  const nuevos = followups
+    .filter((f) => Number(f.is_private) !== 1)
+    .filter((f) => !store.isTechNotified(Number(f.id)))
+    .filter((f) => {
+      const iso = glpiDateToIso(f.date_creation || f.date);
+      return iso && new Date(iso).getTime() > sinceMs;
+    })
+    .sort((a, b) => Number(a.id) - Number(b.id));
+  if (nuevos.length === 0) return;
+
+  const tecnico = await glpi.getAssignedTechnician(ticket.id);
+  const tecnicoSlackId = tecnico?.email ? await findSlackUserByEmail(client, tecnico.email) : null;
+
+  for (const f of nuevos) {
+    store.markTechNotified(Number(f.id), ticket.id);
+
+    // Su propia respuesta no se la contamos a el.
+    if (tecnico?.users_id && Number(f.users_id) === Number(tecnico.users_id)) continue;
+
+    const autor = Number(f.users_id) === config.glpi.bridgeUserId
+      ? (await glpi.getRequesters(ticket.id, ticket).catch(() => []))[0]?.name || 'El solicitante'
+      : await authorNameOf(Number(f.users_id));
+
+    await avisarSoporte(client, {
+      tecnicoSlackId,
+      texto: `Respuesta en el ticket #${ticket.id} de ${autor}`,
+      blocks: respuestaEnTicketBlocks({
+        ticket, autor, texto: glpiHtmlToSlack(f.content), glpiTicketUrl: ticketUrl(ticket.id),
+      }),
+    });
+    log.info(`Ticket ${ticket.id}: avisado del seguimiento ${f.id} al tecnico asignado`);
+  }
+}
+
 /** Sube a Slack los adjuntos referenciados por un contenido de GLPI. */
-async function enviarAdjuntos(client, conversation, docIds, ticketId) {
+async function enviarAdjuntos(client, conversation, docIds, ticketId, followupId = null) {
   if (!docIds.length) return;
   const documentos = [];
   for (const id of docIds) {
@@ -133,7 +205,7 @@ async function enviarAdjuntos(client, conversation, docIds, ticketId) {
       );
     }
   }
-  await uploadDocuments(client, conversation, documentos);
+  await uploadDocuments(client, conversation, documentos, followupId);
 }
 
 /**
@@ -195,6 +267,99 @@ async function publicarHistorial(client, ticket, conversation, previos) {
   log.info(`Ticket ${ticket.id}: publicado el resumen previo (${previos.length} mensajes anteriores)`);
 }
 
+/** Publica un seguimiento en el canal, con sus adjuntos. Devuelve la conversacion. */
+async function publicarSeguimiento(client, ticket, conversation, f) {
+  // Antes de publicar, que este quien tiene que leerlo.
+  await asegurarMiembros(client, conversation);
+
+  const author = await authorNameOf(Number(f.users_id));
+  const body = glpiHtmlToSlack(f.content);
+  const isFirst = !conversation.root_ts;
+
+  const ts = await postToConversation(client, conversation, {
+    text: notificationText(ticket, author),
+    color: COLORES.respuesta,
+    blocks: followupBlocks({
+      ticket, authorName: author, body, glpiTicketUrl: ticketUrl(ticket.id), isFirst,
+    }),
+  });
+
+  const actualizada = store.getConversationByTicket(ticket.id) || conversation;
+  if (ts) {
+    store.rememberFollowupMessage({
+      followupId: Number(f.id),
+      ticketId: ticket.id,
+      channelId: actualizada.channel_id,
+      ts,
+      contentHash: hashContenido(f.content),
+    });
+  }
+
+  // Adjuntos: las imagenes van incrustadas en el contenido, los PDF y demas
+  // ficheros solo en Document_Item. Hay que mirar en los dos sitios.
+  await enviarAdjuntos(client, actualizada, [...new Set([
+    ...extractGlpiDocIds(f.content),
+    ...await glpi.getFollowupDocumentIds(Number(f.id)),
+  ])], ticket.id, Number(f.id));
+
+  return actualizada;
+}
+
+/**
+ * Lo contrario de retirar: un seguimiento que se oculto y vuelve a ser visible
+ * en GLPI tiene que reaparecer en Slack. Se publica de nuevo, y aparece al
+ * final del canal: Slack no permite insertar un mensaje en su sitio original.
+ */
+async function republicarSeguimientosVisibles(client, ticket, visibles, conversation) {
+  for (const f of visibles) {
+    const visto = store.getSeenFollowup(Number(f.id));
+    if (visto?.origin !== 'retirado') continue;
+
+    const actualizada = await publicarSeguimiento(client, ticket, conversation, f);
+    store.updateFollowupOrigin(Number(f.id), 'glpi');
+    log.info(`Ticket ${ticket.id}: seguimiento ${f.id} vuelve a ser visible, republicado`);
+    Object.assign(conversation, actualizada);
+  }
+}
+
+/**
+ * Un seguimiento que ya viajo a Slack y que en GLPI ha dejado de ser visible:
+ * el tecnico lo ha marcado como privado —tipicamente porque se equivoco de
+ * destinatario— o lo ha borrado. Si alli ya no se ve, aqui tampoco.
+ *
+ * Se retira el mensaje y los ficheros que iban con el. Sin dejar rastro ni
+ * aviso: si lo ocultaron fue por algo, y un "mensaje retirado" llamaria la
+ * atencion justo sobre lo que se queria esconder. Si mas tarde vuelve a ser
+ * visible en GLPI, se republica.
+ */
+async function retirarSeguimientosOcultos(client, ticket, followups) {
+  const publicados = store.listFollowupMessages(ticket.id);
+  if (publicados.length === 0) return;
+
+  const porId = new Map(followups.map((f) => [Number(f.id), f]));
+
+  for (const enviado of publicados) {
+    const f = porId.get(enviado.followup_id);
+    const borrado = !f;
+    const oculto = f && Number(f.is_private) === 1;
+    if (!borrado && !oculto) continue;
+
+    await retirarMensaje(client, {
+      channelId: enviado.channel_id,
+      ts: enviado.ts,
+      followupId: enviado.followup_id,
+    });
+    store.forgetFollowupMessage(enviado.followup_id);
+    // 'retirado' en vez de borrar el rastro: si vuelve a hacerse visible, hay
+    // que saber que hubo que quitarlo para poder republicarlo.
+    if (oculto) store.updateFollowupOrigin(enviado.followup_id, 'retirado');
+    log.info(
+      `Ticket ${ticket.id}: seguimiento ${enviado.followup_id} `
+      + `${borrado ? 'borrado' : 'marcado como privado'} en GLPI, retirado de Slack`,
+    );
+  }
+}
+
 /**
  * Si el tecnico edita en GLPI un seguimiento ya enviado, reescribimos el
  * mensaje de Slack en vez de publicar uno nuevo. Se detecta por el hash del
@@ -237,14 +402,21 @@ async function syncEditedFollowups(client, ticket, followups, conversation) {
 
 async function handleNewFollowups(client, ticket, sinceMs) {
   const followups = await glpi.getFollowups(ticket.id);
+
+  // Al equipo de soporte se le avisa de todo, con lista blanca o sin ella.
+  await avisarTecnicoDeRespuestas(client, ticket, followups, sinceMs);
+
   const visibles = followups
     .filter((f) => Number(f.is_private) !== 1)                         // notas internas fuera
     .filter((f) => Number(f.users_id) !== config.glpi.bridgeUserId);   // anti-bucle (autor)
 
   let conversation = store.getConversationByTicket(ticket.id);
 
-  // Ediciones de lo que ya se envio, antes de mirar si hay novedades.
+  // Sobre la lista completa, no sobre las visibles: lo que hay que detectar es
+  // precisamente que un seguimiento haya dejado de estar en ella.
   if (conversation && !conversation.cleaned_at) {
+    await retirarSeguimientosOcultos(client, ticket, followups);
+    await republicarSeguimientosVisibles(client, ticket, visibles, conversation);
     await syncEditedFollowups(client, ticket, visibles, conversation);
   }
 
@@ -278,33 +450,7 @@ async function handleNewFollowups(client, ticket, sinceMs) {
   }
 
   for (const f of fresh) {
-    const author = await authorNameOf(Number(f.users_id));
-    const body = glpiHtmlToSlack(f.content);
-    const isFirst = !conversation.root_ts;
-    const ts = await postToConversation(client, conversation, {
-      text: notificationText(ticket, author),
-      color: COLORES.respuesta,
-      blocks: followupBlocks({
-        ticket, authorName: author, body, glpiTicketUrl: ticketUrl(ticket.id), isFirst,
-      }),
-    });
-    conversation = store.getConversationByTicket(ticket.id) || conversation;
-    if (ts) {
-      store.rememberFollowupMessage({
-        followupId: Number(f.id),
-        ticketId: ticket.id,
-        channelId: conversation.channel_id,
-        ts,
-        contentHash: hashContenido(f.content),
-      });
-    }
-    // Adjuntos: las imagenes van incrustadas en el contenido, los PDF y demas
-    // ficheros solo en Document_Item. Hay que mirar en los dos sitios.
-    await enviarAdjuntos(client, conversation, [...new Set([
-      ...extractGlpiDocIds(f.content),
-      ...await glpi.getFollowupDocumentIds(Number(f.id)),
-    ])], ticket.id);
-
+    conversation = await publicarSeguimiento(client, ticket, conversation, f);
     store.markFollowupSeen(Number(f.id), ticket.id, 'glpi');
     log.info(`Ticket ${ticket.id}: seguimiento ${f.id} enviado a ${conversation.channel_id}`);
   }
@@ -317,7 +463,7 @@ async function handleClosure(client, ticket, conversation) {
   const last = solutions.sort((a, b) => Number(b.id) - Number(a.id))[0];
   const solutionText = last ? glpiHtmlToSlack(last.content) : '';
 
-  await postToConversation(client, conversation, {
+  const ts = await postToConversation(client, conversation, {
     text: `Ticket #${ticket.id} resuelto`,
     color: COLORES.cierre,
     blocks: closureBlocks({
@@ -325,7 +471,11 @@ async function handleClosure(client, ticket, conversation) {
       solutionText,
       delayMs: config.cleanupDelayMs,
     }),
-  }).catch((err) => log.warn(`No se pudo avisar del cierre del ticket ${ticket.id}: ${err.message}`));
+  }).catch((err) => {
+    log.warn(`No se pudo avisar del cierre del ticket ${ticket.id}: ${err.message}`);
+    return null;
+  });
+  if (ts) store.setClosureTs(ticket.id, ts);
 
   const due = new Date(Date.now() + config.cleanupDelayMs).toISOString();
   store.markCleanupDue(ticket.id, due);
@@ -392,7 +542,7 @@ export async function pollOnce(client) {
   const changed = await glpi.searchTicketsModifiedSince(cursorIso);
   log.debug(`Poll: ${changed.length} ticket(s) modificados desde ${cursorIso}`);
 
-  let fallos = 0;
+  const fallidos = [];
   for (const ref of changed) {
     try {
       // El latido marca progreso, no fin de ciclo: una puesta al dia larga es
@@ -415,10 +565,18 @@ export async function pollOnce(client) {
         log.info(`Ticket ${ticket.id} reabierto antes de la limpieza: cancelada`);
       }
 
+      await anunciarTicketNuevo(client, ticket, sinceMs);
       await handleNewTicket(client, ticket, sinceMs);
       await handleNewFollowups(client, ticket, sinceMs);
     } catch (err) {
-      fallos += 1;
+      // Un 404 aqui es un ticket borrado entre la busqueda y la consulta. No es
+      // un fallo que haya que reintentar: del canal huerfano se ocupa el
+      // barrido. Contarlo como error bloquearia el cursor para siempre.
+      if (err.status === 404) {
+        log.info(`Ticket ${ref.id} ya no existe; lo recogera el barrido`);
+        continue;
+      }
+      fallidos.push({ id: ref.id, error: err.message });
       log.error(`Error procesando el ticket ${ref.id}:`, err.message, err.body ?? '');
     }
   }
@@ -442,14 +600,28 @@ export async function pollOnce(client) {
   // por fecha posterior al cursor, asi que moverlo tras un error de red o un
   // limite de la API dejaria ese mensaje fuera para siempre. Repetir el ciclo es
   // inofensivo, de eso se encarga la idempotencia de seen_followups.
-  if (fallos > 0) {
+  if (fallidos.length > 0) {
     const atasco = Math.round((startedAt - new Date(cursorIso).getTime()) / 60000);
     log.warn(
-      `${fallos} ticket(s) con error: el cursor se queda en ${cursorIso} para reintentar. ` +
-      `Lleva ${atasco} min sin avanzar.`,
+      `${fallidos.length} ticket(s) con error: el cursor se queda en ${cursorIso} para `
+      + `reintentar. Lleva ${atasco} min sin avanzar.`,
     );
+
+    // Un ticket que falla siempre no solo se pierde el: bloquea la cola entera,
+    // porque el cursor no puede pasar de el. Eso hay que contarlo.
+    if (atasco >= config.stuckAlertMinutes) {
+      await alerta(
+        'cursor-atascado',
+        `El puente lleva ${atasco} min sin poder avanzar`,
+        `Falla siempre sobre ${fallidos.length} ticket(s): `
+        + `${fallidos.map((f) => `#${f.id} (${f.error})`).join('; ')}. `
+        + 'Mientras no se resuelva, ningún ticket posterior se procesa.',
+      );
+    }
     return;
   }
+
+  await recuperado('cursor-atascado', 'El puente vuelve a avanzar con normalidad');
 
   // Solape de seguridad: la idempotencia (seen_followups) evita duplicados.
   store.setCursor(new Date(startedAt - config.pollOverlapMs).toISOString());

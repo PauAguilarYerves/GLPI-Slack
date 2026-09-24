@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS bot_files (
   ticket_id INTEGER NOT NULL
 );
 
+-- Avisos ya dados al equipo de soporte, para no repetirlos en cada sondeo.
+CREATE TABLE IF NOT EXISTS announced_tickets (
+  ticket_id    INTEGER PRIMARY KEY,
+  announced_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tech_notifications (
+  followup_id  INTEGER PRIMARY KEY,
+  ticket_id    INTEGER,
+  notified_at  TEXT NOT NULL
+);
+
 -- Idempotencia + anti-bucle: todo seguimiento ya procesado (o creado por el puente).
 CREATE TABLE IF NOT EXISTS seen_followups (
   followup_id INTEGER PRIMARY KEY,
@@ -85,6 +96,18 @@ CREATE TABLE IF NOT EXISTS seen_followups (
 const columnas = db.prepare('PRAGMA table_info(conversations)').all().map((c) => c.name);
 if (!columnas.includes('reopen_count')) {
   db.exec('ALTER TABLE conversations ADD COLUMN reopen_count INTEGER NOT NULL DEFAULT 0');
+}
+
+// Saber de que seguimiento venia cada fichero permite retirarlo si ese
+// seguimiento se oculta o se borra en GLPI.
+// Mensaje de cierre: hay que poder quitarle el boton de reabrir cuando se usa.
+if (!columnas.includes('closure_ts')) {
+  db.exec('ALTER TABLE conversations ADD COLUMN closure_ts TEXT');
+}
+
+const colFicheros = db.prepare('PRAGMA table_info(bot_files)').all().map((c) => c.name);
+if (colFicheros.length > 0 && !colFicheros.includes('followup_id')) {
+  db.exec('ALTER TABLE bot_files ADD COLUMN followup_id INTEGER');
 }
 
 // ---------- cursor ----------
@@ -158,6 +181,9 @@ export function saveConversation(input) {
   `).run(c);
   return getConversationByTicket(c.ticket_id);
 }
+export function setClosureTs(ticketId, ts) {
+  db.prepare('UPDATE conversations SET closure_ts = ? WHERE ticket_id = ?').run(ts, ticketId);
+}
 export function markCleanupDue(ticketId, whenIso) {
   db.prepare('UPDATE conversations SET cleanup_at = ? WHERE ticket_id = ? AND cleaned_at IS NULL')
     .run(whenIso, ticketId);
@@ -210,9 +236,19 @@ export function listBotMessages(ticketId) {
 export function forgetBotMessages(ticketId) {
   db.prepare('DELETE FROM bot_messages WHERE ticket_id = ?').run(ticketId);
 }
+export function forgetBotMessage(channelId, ts) {
+  db.prepare('DELETE FROM bot_messages WHERE channel_id = ? AND ts = ?').run(channelId, ts);
+}
 
-export function rememberBotFile(ticketId, fileId) {
-  db.prepare('INSERT OR IGNORE INTO bot_files (file_id, ticket_id) VALUES (?, ?)').run(fileId, ticketId);
+export function rememberBotFile(ticketId, fileId, followupId = null) {
+  db.prepare('INSERT OR IGNORE INTO bot_files (file_id, ticket_id, followup_id) VALUES (?, ?, ?)')
+    .run(fileId, ticketId, followupId);
+}
+export function listBotFilesByFollowup(followupId) {
+  return db.prepare('SELECT file_id FROM bot_files WHERE followup_id = ?').all(followupId);
+}
+export function forgetBotFile(fileId) {
+  db.prepare('DELETE FROM bot_files WHERE file_id = ?').run(fileId);
 }
 export function listBotFiles(ticketId) {
   return db.prepare('SELECT file_id FROM bot_files WHERE ticket_id = ?').all(ticketId);
@@ -240,6 +276,12 @@ export function rememberFollowupMessage({ followupId, ticketId, channelId, ts, c
 export function getFollowupMessage(followupId) {
   return db.prepare('SELECT * FROM followup_messages WHERE followup_id = ?').get(followupId);
 }
+export function listFollowupMessages(ticketId) {
+  return db.prepare('SELECT * FROM followup_messages WHERE ticket_id = ?').all(ticketId);
+}
+export function forgetFollowupMessage(followupId) {
+  db.prepare('DELETE FROM followup_messages WHERE followup_id = ?').run(followupId);
+}
 export function updateFollowupHash(followupId, contentHash) {
   db.prepare('UPDATE followup_messages SET content_hash = ? WHERE followup_id = ?')
     .run(contentHash, followupId);
@@ -261,14 +303,41 @@ export function rememberInvited(channelId, userId) {
   db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)')
     .run(channelId, userId);
 }
+export function listInvited(channelId) {
+  return db.prepare('SELECT user_id FROM channel_members WHERE channel_id = ?').all(channelId);
+}
 export function isInvited(channelId, userId) {
   return db.prepare('SELECT 1 AS hit FROM channel_members WHERE channel_id = ? AND user_id = ?')
     .get(channelId, userId) !== undefined;
 }
 
+// ---------- avisos al equipo de soporte ----------
+export function isTicketAnnounced(ticketId) {
+  return db.prepare('SELECT 1 AS hit FROM announced_tickets WHERE ticket_id = ?')
+    .get(ticketId) !== undefined;
+}
+export function markTicketAnnounced(ticketId) {
+  db.prepare('INSERT OR IGNORE INTO announced_tickets (ticket_id, announced_at) VALUES (?, ?)')
+    .run(ticketId, new Date().toISOString());
+}
+export function isTechNotified(followupId) {
+  return db.prepare('SELECT 1 AS hit FROM tech_notifications WHERE followup_id = ?')
+    .get(followupId) !== undefined;
+}
+export function markTechNotified(followupId, ticketId) {
+  db.prepare('INSERT OR IGNORE INTO tech_notifications (followup_id, ticket_id, notified_at) VALUES (?, ?, ?)')
+    .run(followupId, ticketId, new Date().toISOString());
+}
+
 // ---------- seguimientos ----------
 export function isFollowupSeen(followupId) {
   return db.prepare('SELECT 1 AS hit FROM seen_followups WHERE followup_id = ?').get(followupId) !== undefined;
+}
+export function getSeenFollowup(followupId) {
+  return db.prepare('SELECT * FROM seen_followups WHERE followup_id = ?').get(followupId);
+}
+export function updateFollowupOrigin(followupId, origin) {
+  db.prepare('UPDATE seen_followups SET origin = ? WHERE followup_id = ?').run(origin, followupId);
 }
 export function markFollowupSeen(followupId, ticketId, origin) {
   db.prepare('INSERT OR IGNORE INTO seen_followups (followup_id, ticket_id, origin, seen_at) VALUES (?, ?, ?, ?)')

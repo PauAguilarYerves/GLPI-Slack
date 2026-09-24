@@ -34,7 +34,7 @@ async function publicar(texto, blocks, color) {
     if (code === 'not_in_channel' || code === 'channel_not_found') {
       log.error(
         `No se puede avisar en ${config.alertChannel}: el bot no esta en ese canal. `
-        + 'Invitalo con /invite @GLPI o corrige ALERT_CHANNEL.',
+        + 'Invitalo con /invite @GLPI TicketBot o corrige ALERT_CHANNEL.',
       );
     } else {
       log.warn(`No se pudo publicar la alerta: ${code || err.message}`);

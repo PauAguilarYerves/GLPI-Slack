@@ -7,9 +7,9 @@ import { slackToGlpiHtml } from './format.js';
 import { bootstrapCursor, startPolling } from './poller.js';
 import { configurarAlertas, alerta } from './alerts.js';
 import {
-  REPLY_ACTION_ID, REPLY_VIEW_ID, OPEN_GLPI_ACTION_ID, downloadSlackFile,
-  postToConversation, reopenedBlocks, avisarSoporte, avisoReaperturaBlocks,
-  findSlackUserByEmail, COLORES,
+  REPLY_ACTION_ID, REPLY_VIEW_ID, OPEN_GLPI_ACTION_ID, REOPEN_ACTION_ID,
+  downloadSlackFile, postToConversation, updateMessage, reopenedBlocks, closureBlocks,
+  avisarSoporte, avisoReaperturaBlocks, findSlackUserByEmail, COLORES,
 } from './slack.js';
 
 const { App } = pkg;
@@ -48,7 +48,7 @@ async function pushReplyToGlpi(client, { ticketId, text, slackUserId }) {
  *
  * Devuelve true si el ticket ha vuelto a estar abierto.
  */
-async function reabrirPorRespuesta(client, conversation, slackUserId, mensaje) {
+async function reabrirTicket(client, conversation, slackUserId, mensaje) {
   try {
     await glpi.reopenTicket(conversation.ticket_id, config.reopenStatus);
   } catch (err) {
@@ -156,8 +156,17 @@ app.event('message', async ({ event, client }) => {
 
   // Cerrado pero dentro del margen de gracia: la respuesta lo reabre.
   const enMargenDeGracia = Boolean(conversation.cleanup_at) && !conversation.cleaned_at;
+
+  // Escribir ya no reabre nada: se registra el mensaje, pero el canal sigue
+  // condenado salvo que se pulse el boton. Se avisa para que no sea una sorpresa.
+  if (enMargenDeGracia && !config.reopenOnReply) {
+    await ephemeral(client, event.channel, event.user,
+      'Este ticket está resuelto. He registrado tu mensaje, pero el canal se cerrará igual. '
+      + 'Si el problema sigue, pulsa *Sigo con el problema* en el mensaje de cierre.');
+  }
+
   if (enMargenDeGracia && config.reopenOnReply) {
-    const reabierto = await reabrirPorRespuesta(client, conversation, event.user, texto);
+    const reabierto = await reabrirTicket(client, conversation, event.user, texto);
     if (!reabierto) {
       await ephemeral(client, event.channel, event.user,
         'He registrado tu mensaje, pero no he podido reabrir el ticket en GLPI. '
@@ -317,6 +326,49 @@ app.event('member_joined_channel', async ({ event, client }) => {
         ? '. El workspace restringe quien puede retirar miembros de canales privados.'
         : ''),
     );
+  }
+});
+
+/**
+ * Boton "Sigo con el problema" del mensaje de cierre. Reabrir es un acto
+ * consciente: escribir en el canal ya no basta, porque un "gracias" no deberia
+ * devolver un ticket a la cola del equipo.
+ */
+app.action(REOPEN_ACTION_ID, async ({ ack, body, client }) => {
+  await ack();
+
+  const ticketId = Number(body.actions[0].value);
+  const conversation = store.getConversationByTicket(ticketId);
+  const canal = body.channel?.id || conversation?.channel_id;
+
+  if (!conversation || conversation.cleaned_at) {
+    await ephemeral(client, canal, body.user.id,
+      `El ticket #${ticketId} ya está cerrado del todo. Abre uno nuevo en GLPI.`);
+    return;
+  }
+  if (!conversation.cleanup_at) {
+    await ephemeral(client, canal, body.user.id, 'Este ticket ya estaba abierto.');
+    return;
+  }
+
+  const reabierto = await reabrirTicket(client, conversation, body.user.id, null);
+  if (!reabierto) {
+    await ephemeral(client, canal, body.user.id,
+      `No he podido reabrirlo en GLPI. Hazlo a mano: ${glpiTicketUrl(ticketId)}`);
+    return;
+  }
+
+  // Se le quita el boton al mensaje de cierre para que no se pulse dos veces.
+  if (conversation.closure_ts) {
+    const quien = await etiquetaDe(client, body.user.id);
+    const ticket = await glpi.getTicket(ticketId).catch(() => ({ id: ticketId, name: '' }));
+    await updateMessage(client, {
+      channelId: conversation.channel_id,
+      ts: conversation.closure_ts,
+      text: `Ticket #${ticketId} reabierto`,
+      color: COLORES.reapertura,
+      blocks: closureBlocks({ ticket, solutionText: null, delayMs: 0, reabiertoPor: quien }),
+    }).catch(() => {});
   }
 });
 

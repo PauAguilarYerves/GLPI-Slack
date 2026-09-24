@@ -54,6 +54,9 @@ export const config = {
   // Un mismo tipo de fallo no se repite antes de estos minutos: con el sondeo a
   // 5 segundos, publicar cada error convertiria el canal en ruido inservible.
   alertCooldownMinutes: int(process.env.ALERT_COOLDOWN_MINUTES, 30),
+  // Si un ticket falla una y otra vez, el cursor deja de avanzar y con el se
+  // para todo lo demas. Pasados estos minutos, hay que avisar.
+  stuckAlertMinutes: int(process.env.STUCK_ALERT_MINUTES, 5),
   // archive = solo archivar (el usuario aun lo encuentra en "canales archivados")
   // purge   = borrar mensajes del bot + EXPULSAR a los miembros + archivar  <- desaparece
   // delete  = purge + admin.conversations.delete (solo Enterprise Grid)
@@ -76,6 +79,14 @@ export const config = {
   // Canal del equipo de soporte (ID C... o #nombre) para los avisos que no
   // tienen un tecnico asignado al que dirigirse. Vacio = no se usa.
   teamChannel: process.env.TEAM_CHANNEL || '',
+  // Avisar de cada ticket nuevo que entra en GLPI.
+  notifyNewTickets: bool(process.env.NOTIFY_NEW_TICKETS, false),
+  // A quien avisar de los tickets nuevos, por mensaje directo. Correos
+  // separados por comas. Si esta vacio se usa TEAM_CHANNEL.
+  newTicketRecipients: (process.env.NEW_TICKET_RECIPIENTS || '')
+    .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
+  // Avisar al tecnico asignado de cada respuesta que reciben sus tickets.
+  notifyTicketReplies: bool(process.env.NOTIFY_TICKET_REPLIES, false),
   cleanupDelayMs: process.env.CLEANUP_DELAY_SECONDS
     ? int(process.env.CLEANUP_DELAY_SECONDS, 0) * 1000
     : int(process.env.CLEANUP_DELAY_MINUTES, 0) * 60 * 1000,
@@ -85,6 +96,9 @@ export const config = {
   // recuento y el enlace a GLPI.
   historyMessages: int(process.env.HISTORY_MESSAGES, 3),
   inviteTechnician: bool(process.env.INVITE_TECHNICIAN, false),
+  // Si alguien se sale del canal de su ticket y el tecnico responde, se le
+  // vuelve a meter: si no, la respuesta no la lee nadie.
+  reinviteOnReply: bool(process.env.REINVITE_ON_REPLY, true),
   // Expulsa de los canales de ticket a quien no haya invitado el propio puente.
   enforcePrivacy: bool(process.env.ENFORCE_PRIVACY, true),
   // Usuarios de Slack (IDs U... separados por comas) que pueden entrar siempre.

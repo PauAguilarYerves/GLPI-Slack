@@ -78,6 +78,7 @@ const cuerpoDe = ({ blocks, attachments, text }) => {
 const calls = [];
 let canalArchivado = false;
 let fallarEnvio = false;
+const fueraDelCanal = new Set();
 let ts = 1700000000;
 const fakeClient = {
   auth: { test: async () => ({ user_id: 'U_BOT' }) },
@@ -103,7 +104,15 @@ const fakeClient = {
     },
     list: async () => ({ channels: [{ id: 'C_TKT42', name: 'ticket-el-pc-no-arranca-42', is_archived: canalArchivado }] }),
     unarchive: async ({ channel }) => { calls.push(['unarchive', channel]); canalArchivado = false; return {}; },
-    invite: async ({ channel, users }) => { calls.push(['invite', channel, users]); return {}; },
+    invite: async ({ channel, users }) => {
+      calls.push(['invite', channel, users]);
+      // Simula que el usuario ya esta dentro salvo que se haya salido.
+      if (!fueraDelCanal.has(users)) {
+        const e = new Error('already_in_channel'); e.data = { error: 'already_in_channel' }; throw e;
+      }
+      fueraDelCanal.delete(users);
+      return {};
+    },
     setPurpose: async () => ({}),
     members: async ({ channel }) => { calls.push(['members', channel]); return { members: ['U_BOT', 'U_PAU'] }; },
     kick: async ({ channel, user }) => { calls.push(['kick', channel, user]); return {}; },
@@ -111,7 +120,11 @@ const fakeClient = {
   },
   chat: {
     postMessage: async (args) => {
-      if (fallarEnvio) { const e = new Error('ratelimited'); e.data = { error: 'ratelimited' }; throw e; }
+      // El fallo simulado afecta al canal del ticket, no al de alertas: si
+      // Slack estuviera caido del todo, tampoco podria avisarnos.
+      if (fallarEnvio && args.channel !== 'C_ALERTAS') {
+        const e = new Error('ratelimited'); e.data = { error: 'ratelimited' }; throw e;
+      }
       ts += 1;
       calls.push(['postMessage', args.channel, cuerpoDe(args)]);
       return { ts: `${ts}.000100` };
@@ -128,11 +141,14 @@ const fakeClient = {
 
 const store = await import('../src/store.js');
 const { pollOnce, bootstrapCursor } = await import('../src/poller.js');
+const { configurarAlertas } = await import('../src/alerts.js');
 const { glpi } = await import('../src/glpi.js');
 const { slackToGlpiHtml } = await import('../src/format.js');
 
+configurarAlertas(fakeClient);
 bootstrapCursor();
 store.setCursor(new Date(Date.now() - 3600_000).toISOString());
+fueraDelCanal.add('U_PAU,U_LUCIA');   // la invitacion inicial, en bloque
 
 console.log('--- PASADA 1: seguimiento nuevo del tecnico ---');
 await pollOnce(fakeClient);
@@ -172,6 +188,80 @@ if (!calls.some((c) => c[0] === 'update')) {
 }
 if (calls.some((c) => c[0] === 'postMessage')) {
   console.error('FALLO: la edicion publico un mensaje nuevo en vez de reescribir el existente');
+  process.exit(1);
+}
+
+console.log('--- PASADA 3c: el tecnico marca el seguimiento como PRIVADO ---');
+followups[0].is_private = 1;
+calls.splice(0);
+await pollOnce(fakeClient);
+calls.forEach((c) => console.log(' ', c.join(' | ').slice(0, 160)));
+if (!calls.some((c) => c[0] === 'delete')) {
+  console.error('FALLO: al marcarlo privado deberia retirarse el mensaje de Slack');
+  process.exit(1);
+}
+// Mientras siga privado, no debe reenviarse.
+calls.splice(0);
+await pollOnce(fakeClient);
+if (calls.some((c) => c[0] === 'postMessage')) {
+  console.error('FALLO: un seguimiento privado no puede reenviarse');
+  process.exit(1);
+}
+
+// Al quitarle el privado, tiene que volver a aparecer.
+followups[0].is_private = 0;
+calls.splice(0);
+await pollOnce(fakeClient);
+calls.forEach((c) => console.log(' ', c.join(' | ').slice(0, 160)));
+if (!calls.some((c) => c[0] === 'postMessage')) {
+  console.error('FALLO: al dejar de ser privado deberia republicarse');
+  process.exit(1);
+}
+// Y una sola vez, no en cada ciclo.
+calls.splice(0);
+await pollOnce(fakeClient);
+if (calls.some((c) => c[0] === 'postMessage')) {
+  console.error('FALLO: se ha republicado dos veces');
+  process.exit(1);
+}
+
+console.log('--- PASADA 3e: el usuario se sale del canal y el tecnico responde ---');
+fueraDelCanal.add('U_PAU');            // se ha salido
+followups.push({
+  id: 9040, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 7,
+  content: '<p>¿Sigues ahi?</p>', date_creation: glpiNow(1400),
+});
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+const reinvitado = calls.find((c) => c[0] === 'invite' && c[2] === 'U_PAU');
+if (!reinvitado) {
+  console.error('FALLO: no se reinvito al usuario que se habia salido');
+  process.exit(1);
+}
+console.log('  reinvitado antes de publicar:', reinvitado[2]);
+
+console.log('--- PASADA 3d: el tecnico BORRA un seguimiento ya enviado ---');
+// Primero uno nuevo que si llegue a publicarse.
+followups.push({
+  id: 9030, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 7,
+  content: '<p>Esto lo escribo por error.</p>', date_creation: glpiNow(1500),
+});
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+if (!calls.some((c) => c[0] === 'postMessage')) {
+  console.error('FALLO: el seguimiento de prueba no llego a publicarse');
+  process.exit(1);
+}
+
+// Y ahora desaparece de GLPI.
+followups.splice(followups.findIndex((f) => f.id === 9030), 1);
+calls.splice(0);
+await pollOnce(fakeClient);
+calls.forEach((c) => console.log(' ', c.join(' | ').slice(0, 160)));
+if (!calls.some((c) => c[0] === 'delete')) {
+  console.error('FALLO: un seguimiento borrado en GLPI debe retirarse de Slack');
   process.exit(1);
 }
 
@@ -255,6 +345,14 @@ if (cursorAntes !== cursorDespues) {
   process.exit(1);
 }
 
+// Y con el cursor atascado, tiene que avisar al canal de alertas.
+const aviso = calls.find((c) => c[0] === 'postMessage' && c[1] === 'C_ALERTAS');
+if (!aviso) {
+  console.error('FALLO: un ticket que bloquea el cursor deberia avisar al canal de alertas');
+  process.exit(1);
+}
+console.log('  aviso al canal de alertas:', String(aviso[2]).slice(0, 90));
+
 fallarEnvio = false;
 calls.splice(0);
 await pollOnce(fakeClient);
@@ -276,6 +374,10 @@ store.setKv('last_sweep', '0');           // forzar el barrido en este ciclo
 calls.splice(0);
 await pollOnce(fakeClient);
 calls.forEach((c) => console.log(' ', c.join(' | ').slice(0, 170)));
+if (calls.some((c) => c[1] === 'C_ALERTAS')) {
+  console.error('FALLO: un ticket borrado no debe disparar la alerta de cursor atascado');
+  process.exit(1);
+}
 const tras = store.getConversationByTicket(42);
 if (!tras.cleaned_at) {
   console.error('FALLO: el canal de un ticket eliminado sigue abierto');

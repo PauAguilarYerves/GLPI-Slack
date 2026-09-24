@@ -24,7 +24,8 @@ la conversación cuando el ticket se resuelve.
 | Se crea un ticket | Se abre un canal privado con el solicitante y se publica su solicitud |
 | El técnico añade un seguimiento | Llega al canal, con sus adjuntos |
 | El técnico edita un seguimiento | Se reescribe el mensaje, marcado como editado |
-| El ticket se resuelve o cierra | Se publica la solución y el canal desaparece del Slack del usuario |
+| El técnico lo marca como privado, o lo borra | Se retira de Slack, con sus adjuntos. Si vuelve a ser visible, reaparece |
+| El ticket se resuelve o cierra | Se publica la solución, con un botón para reabrir, y el canal desaparece del Slack del usuario |
 | El ticket se elimina | Se avisa y se cierra la conversación, aunque GLPI ya no lo devuelva |
 | El ticket se reabre | Se estrena canal `-r2`; el anterior queda archivado |
 
@@ -33,7 +34,7 @@ la conversación cuando el ticket se resuelve.
 | El usuario escribe en el canal | Se añade como seguimiento del ticket |
 | El usuario edita su mensaje | Se reescribe ese seguimiento |
 | El usuario sube un archivo | Se adjunta al ticket como documento |
-| El usuario escribe tras el cierre | El ticket se reabre y se avisa al técnico por mensaje directo |
+| El usuario pulsa «Sigo con el problema» | El ticket se reabre y se avisa al técnico por mensaje directo |
 
 Y de sí mismo: si el puente no puede hablar con GLPI, si un usuario no tiene cuenta de Slack o
 si alguien le ha cambiado los permisos, **lo dice en un canal de alertas** (sección 9).
@@ -335,6 +336,7 @@ compañeros → vaciar la lista.
 | `REPLY_MODE` | `inline` | `inline` (escribir en el canal) o `modal` (botón + ventana; no deja ningún mensaje humano en el canal) |
 | `MESSAGE_COLORS` | `true` | Barra de color lateral por tipo de mensaje |
 | `INVITE_TECHNICIAN` | `false` | Invita también al técnico asignado al canal |
+| `REINVITE_ON_REPLY` | `true` | Si el solicitante se salió del canal y el técnico responde, se le vuelve a invitar |
 | `HISTORY_MESSAGES` | `3` | Mensajes previos que se resumen al abrir el canal de un ticket que ya existía |
 
 ### Cierre y limpieza
@@ -344,9 +346,12 @@ compañeros → vaciar la lista.
 | `CLEANUP_MODE` | `purge` | `archive`, `purge` (borra mensajes + expulsa + archiva) o `delete` (solo Grid) |
 | `CLEANUP_DELAY_MINUTES` | `0` | Margen de gracia antes de limpiar |
 | `CLEANUP_DELAY_SECONDS` | vacío | Si está puesto, manda sobre los minutos. Para pruebas |
-| `REOPEN_ON_REPLY` | `true` | Si el usuario escribe en el margen de gracia, reabre el ticket |
+| `REOPEN_ON_REPLY` | `false` | Reabrir por el mero hecho de escribir. Desactivado: el mensaje de cierre lleva un botón, y reabrir debe ser un acto consciente |
 | `REOPEN_STATUS` | `2` | Estado al que vuelve (2 = en curso, 1 = nuevo) |
 | `NOTIFY_TECHNICIAN` | `true` | Avisa por mensaje directo al técnico asignado de las reaperturas |
+| `NOTIFY_NEW_TICKETS` | `false` | Avisa de cada ticket nuevo que entra en GLPI |
+| `NEW_TICKET_RECIPIENTS` | vacío | Correos que reciben ese aviso por mensaje directo. Vacío = se usa `TEAM_CHANNEL` |
+| `NOTIFY_TICKET_REPLIES` | `false` | Avisa al técnico asignado de cada respuesta en sus tickets |
 | `TEAM_CHANNEL` | vacío | Canal del equipo para los avisos sin técnico asignado. El bot debe estar dentro |
 
 ### Sondeo y seguridad
@@ -360,6 +365,7 @@ compañeros → vaciar la lista.
 | `WATCHDOG_MINUTES` | `5` | Si el sondeo deja de progresar durante este tiempo, el proceso se cierra solo para que el supervisor lo reinicie. `0` = desactivado |
 | `ALERT_CHANNEL` | vacío | Canal privado donde el puente avisa de sus propios fallos. El bot debe estar dentro. Vacío = solo log |
 | `ALERT_COOLDOWN_MINUTES` | `30` | Un mismo tipo de fallo no se repite antes de este tiempo |
+| `STUCK_ALERT_MINUTES` | `5` | Minutos que puede llevar el cursor sin avanzar por un ticket que falla antes de avisar |
 | `ALLOWED_REQUESTER_EMAILS` | vacío | Lista blanca de solicitantes. Vacío = todos |
 | `DRY_RUN` | `false` | Solo registra en el log lo que haría |
 | `ONLY_TICKETS_CREATED_AFTER_ACTIVATION` | `false` | `true` ignora los tickets anteriores a la activación aunque tengan actividad nueva |
@@ -470,7 +476,7 @@ ALERT_CHANNEL=C0123456789        # ID del canal, o #nombre
 ALERT_COOLDOWN_MINUTES=30
 ```
 
-Crea un canal privado, invita al bot con `/invite @GLPI` y pon su ID. Para comprobar que
+Crea un canal privado, invita al bot con `/invite @GLPI TicketBot` y pon su ID. Para comprobar que
 llega, sin romper nada:
 
 ```bash
@@ -492,6 +498,30 @@ docker compose run --rm glpi-slack-bridge node src/tools/test-alert.js
 
 Cada uno lleva su mensaje en verde cuando la cosa se recupera, para no tener que entrar a
 comprobarlo.
+
+### Avisos al equipo de soporte
+
+Aparte de los fallos técnicos, el puente puede avisar al equipo de lo que pasa en los tickets,
+para no depender de entrar en GLPI ni del correo que nadie lee:
+
+```bash
+NOTIFY_NEW_TICKETS=true
+NEW_TICKET_RECIPIENTS=tecnico1@empresa.com,tecnico2@empresa.com
+NOTIFY_TICKET_REPLIES=true
+```
+
+| Aviso | A quién |
+|---|---|
+| **Ticket nuevo** | Por mensaje directo a los correos de `NEW_TICKET_RECIPIENTS`. Un ticket recién entrado no tiene asignado, así que hay que decir a quién avisar |
+| **Respuesta en tu ticket** | Por mensaje directo al técnico asignado. Incluye las respuestas que llegan desde Slack, que antes solo se veían entrando en GLPI |
+
+Si un ticket recibe respuesta y no tiene técnico asignado, el aviso cae en `TEAM_CHANNEL`
+como red de seguridad, o se pierde si está vacío.
+
+**Estos avisos no miran `ALLOWED_REQUESTER_EMAILS`.** Al equipo le interesan todos los
+tickets, no solo los del piloto: al activarlos empezáis a recibir avisos de la empresa
+entera aunque los usuarios sigan sin ver nada. Al técnico no se le avisa de sus propias
+respuestas.
 
 ### Por qué agrupa
 
@@ -585,6 +615,8 @@ Tres capas:
 | **No llegan los avisos al canal de alertas** | El bot no está en el canal, o `ALERT_CHANNEL` se añadió con `sed` a un `.env` que no tenía esa línea | `npm run check` lo verifica; `sed -i 's/^X=.*/.../'` no crea líneas nuevas |
 | **Un canal sigue abierto con el ticket ya borrado** | El barrido aún no ha pasado | Corre cada `SWEEP_INTERVAL_MINUTES`; un ticket borrado devuelve 404 y no reaparece en la búsqueda |
 | **El título del mensaje sale dos veces** | Se mandó `text` junto con `attachments` | Con barra de color, el texto de notificación va como `fallback` dentro del adjunto |
+| **`is_archived` en bucle, y nada se procesa** | Slack archiva un canal privado cuando se queda sin miembros humanos, y el cursor no avanza mientras algo falla | El puente lo desarchiva solo si el ticket sigue abierto; si ves esto, actualiza |
+| **El puente lleva minutos sin avanzar** | Un ticket falla siempre y bloquea la cola entera | Salta un aviso al canal de alertas con el ticket y el error. Resuélvelo o bórralo |
 
 Sube el detalle del log con `LOG_LEVEL=debug`.
 
