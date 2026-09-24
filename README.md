@@ -274,7 +274,7 @@ npm run check
 | `npm run check` | Verifica credenciales, permisos y correspondencia de correos. No escribe |
 | `npm start` | Arranca el puente |
 | `npm run alert:test` | Manda un aviso de prueba al canal de alertas |
-| `npm run cursor:reset` | Fija el cursor en «ahora»: descarta lo acumulado durante una parada |
+| `npm run cursor:reset` | Fija el cursor en «ahora»: descarta lo acumulado durante una parada. Admite una fecha ISO para retroceder y reprocesar |
 | `npm run dev` | Como `npm start`, pero reiniciando al guardar cambios |
 
 Verifica credenciales, el perfil de GLPI, la visibilidad de tickets, los scopes de Slack y que
@@ -599,6 +599,9 @@ Tres capas:
   posterior al cursor, así que moverlo tras un error de red dejaría ese mensaje fuera para
   siempre. Repetir el ciclo es inofensivo.
 - Para descartar lo acumulado tras una parada larga: `npm run cursor:reset`.
+- Para recuperar algo que se perdió, se puede retroceder:
+  `node src/tools/reset-cursor.js 2026-09-24T10:39:00Z`. Comprueba antes cuántos tickets se
+  han movido en ese intervalo, porque todos se reprocesan.
 
 ---
 
