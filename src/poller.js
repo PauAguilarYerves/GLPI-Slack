@@ -121,6 +121,54 @@ async function crearConversacion(client, ticket) {
 }
 
 /**
+ * Si anaden un solicitante al ticket despues de crear el canal, hay que meterlo
+ * tambien en la conversacion. Se compara con una sola llamada a GLPI: solo
+ * cuando aparece alguien nuevo se resuelve su correo y su cuenta de Slack.
+ */
+async function sincronizarSolicitantes(client, ticket, conversation) {
+  if (config.mode !== 'channel' || conversation.cleaned_at) return;
+
+  const claves = await glpi.getRequesterKeys(ticket.id).catch(() => []);
+  const nuevas = claves.filter((k) => !store.isRequesterKnown(ticket.id, k));
+  if (nuevas.length === 0) return;
+
+  // Ya sabemos que hay alguien nuevo: ahora si toca resolver quien es.
+  const requesters = await glpi.getRequesters(ticket.id, ticket);
+  const allow = config.allowedRequesterEmails;
+
+  for (const clave of nuevas) {
+    store.rememberRequester(ticket.id, clave);
+
+    const r = requesters.find(
+      (x) => String(x.users_id) === clave || `email:${x.email}` === clave,
+    );
+    if (!r?.email) continue;
+
+    // Con lista blanca activa, un solicitante anadido que no este en ella no
+    // entra: si no, un ticket compartido colaria gente fuera del piloto.
+    if (allow.length > 0 && !allow.includes(r.email.toLowerCase())) {
+      log.info(`Ticket ${ticket.id}: ${r.email} anadido como solicitante pero fuera de la lista blanca`);
+      continue;
+    }
+
+    const slackId = await findSlackUserByEmail(client, r.email);
+    if (!slackId) {
+      log.warn(`Ticket ${ticket.id}: ${r.email} anadido como solicitante pero sin cuenta de Slack`);
+      continue;
+    }
+    if (store.isInvited(conversation.channel_id, slackId)) continue;
+
+    await client.conversations
+      .invite({ channel: conversation.channel_id, users: slackId })
+      .catch((err) => {
+        if (!['already_in_channel', 'cant_invite_self'].includes(err?.data?.error)) throw err;
+      });
+    store.rememberInvited(conversation.channel_id, slackId);
+    log.info(`Ticket ${ticket.id}: ${r.email} anadido como solicitante, invitado al canal`);
+  }
+}
+
+/**
  * Avisa al equipo de cada ticket que entra. Va aparte de la conversacion con el
  * usuario y NO mira la lista blanca: al equipo le interesan todos los tickets,
  * no solo los del piloto.
@@ -567,6 +615,10 @@ export async function pollOnce(client) {
 
       await anunciarTicketNuevo(client, ticket, sinceMs);
       await handleNewTicket(client, ticket, sinceMs);
+
+      const viva = store.getConversationByTicket(ticket.id);
+      if (viva && !viva.cleaned_at) await sincronizarSolicitantes(client, ticket, viva);
+
       await handleNewFollowups(client, ticket, sinceMs);
     } catch (err) {
       // Un 404 aqui es un ticket borrado entre la busqueda y la consulta. No es

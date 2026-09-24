@@ -191,6 +191,10 @@ export async function ensureConversation(client, { ticket, requesters, technicia
     });
   // Queda constancia de a quien hemos invitado: el resto sobra en este canal.
   invitees.forEach((u) => store.rememberInvited(channelId, u));
+  // Y de que solicitantes habia ya, para detectar despues a los que se anadan.
+  for (const r of requesters) {
+    store.rememberRequester(ticket.id, r.users_id ? String(r.users_id) : `email:${r.email}`);
+  }
 
   store.saveConversation({
     ticket_id: ticket.id,

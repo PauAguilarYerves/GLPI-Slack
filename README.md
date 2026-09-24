@@ -21,7 +21,8 @@ la conversación cuando el ticket se resuelve.
 
 | Evento en GLPI | Qué ocurre en Slack |
 |---|---|
-| Se crea un ticket | Se abre un canal privado con el solicitante y se publica su solicitud |
+| Se crea un ticket | Se abre un canal privado con sus solicitantes y se publica la solicitud |
+| Se añade un solicitante después | Entra al canal en el siguiente sondeo |
 | El técnico añade un seguimiento | Llega al canal, con sus adjuntos |
 | El técnico edita un seguimiento | Se reescribe el mensaje, marcado como editado |
 | El técnico lo marca como privado, o lo borra | Se retira de Slack, con sus adjuntos. Si vuelve a ser visible, reaparece |

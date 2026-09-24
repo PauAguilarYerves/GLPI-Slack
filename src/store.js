@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS tech_notifications (
   notified_at  TEXT NOT NULL
 );
 
+-- Solicitantes ya conocidos de cada ticket. Permite detectar en un solo
+-- vistazo si han anadido a alguien despues de crear el canal, sin tener que
+-- resolver correos en cada sondeo.
+CREATE TABLE IF NOT EXISTS ticket_requesters (
+  ticket_id INTEGER NOT NULL,
+  actor_key TEXT NOT NULL,
+  PRIMARY KEY (ticket_id, actor_key)
+);
+
 -- Idempotencia + anti-bucle: todo seguimiento ya procesado (o creado por el puente).
 CREATE TABLE IF NOT EXISTS seen_followups (
   followup_id INTEGER PRIMARY KEY,
@@ -309,6 +318,15 @@ export function listInvited(channelId) {
 export function isInvited(channelId, userId) {
   return db.prepare('SELECT 1 AS hit FROM channel_members WHERE channel_id = ? AND user_id = ?')
     .get(channelId, userId) !== undefined;
+}
+
+export function isRequesterKnown(ticketId, actorKey) {
+  return db.prepare('SELECT 1 AS hit FROM ticket_requesters WHERE ticket_id = ? AND actor_key = ?')
+    .get(ticketId, String(actorKey)) !== undefined;
+}
+export function rememberRequester(ticketId, actorKey) {
+  db.prepare('INSERT OR IGNORE INTO ticket_requesters (ticket_id, actor_key) VALUES (?, ?)')
+    .run(ticketId, String(actorKey));
 }
 
 // ---------- avisos al equipo de soporte ----------

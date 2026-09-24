@@ -12,6 +12,8 @@ let ticketStatus = 2;
 let ticketBorrado = false;
 // Tickets extra que aparecen a mitad de la prueba (alta reciente).
 const extras = new Map();
+// Dos solicitantes (type 1) y un tecnico asignado (type 2).
+const actoresDel42 = [{ users_id: 5, type: 1 }, { users_id: 6, type: 1 }, { users_id: 7, type: 2 }];
 const createdFollowups = [];
 let followups = [{
   id: 9001, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 7,
@@ -50,12 +52,12 @@ globalThis.fetch = async (url, opts = {}) => {
   if (/^\/ITILFollowup\/\d+\/Document_Item$/.test(p)) return json([]);
   if (p === '/Ticket/42/ITILSolution') return json([{ id: 555, content: '<p>Cambiada la fuente de alimentaci&oacute;n.</p>' }]);
   // Dos solicitantes (type 1) y un tecnico asignado (type 2).
-  if (p === '/Ticket/42/Ticket_User') {
-    return json([{ users_id: 5, type: 1 }, { users_id: 6, type: 1 }, { users_id: 7, type: 2 }]);
-  }
+  if (p === '/Ticket/42/Ticket_User') return json(actoresDel42);
   if (p === '/User/5') return json({ id: 5, name: 'pau', firstname: 'Pau', realname: 'Pérez' });
   if (p === '/User/7') return json({ id: 7, name: 'tecnico', firstname: 'Marta', realname: 'Gil' });
   if (p === '/User/6') return json({ id: 6, name: 'lucia', firstname: 'Lucía', realname: 'Soler' });
+  if (p === '/User/8') return json({ id: 8, name: 'nuria', firstname: 'Nuria', realname: 'Gil' });
+  if (p === '/User/8/UserEmail') return json([{ email: 'nuria@empresa.com', is_default: 1 }]);
   if (p === '/User/5/UserEmail') return json([{ email: 'pau@empresa.com', is_default: 1 }]);
   if (p === '/User/6/UserEmail') return json([{ email: 'lucia@empresa.com', is_default: 1 }]);
   if (p === '/User/7/UserEmail') return json([{ email: 'marta@empresa.com', is_default: 1 }]);
@@ -85,7 +87,10 @@ const fakeClient = {
   users: {
     lookupByEmail: async ({ email }) => {
       calls.push(['lookupByEmail', email]);
-      const mapa = { 'pau@empresa.com': 'U_PAU', 'lucia@empresa.com': 'U_LUCIA', 'marta@empresa.com': 'U_MARTA' };
+      const mapa = {
+        'pau@empresa.com': 'U_PAU', 'lucia@empresa.com': 'U_LUCIA',
+        'marta@empresa.com': 'U_MARTA', 'nuria@empresa.com': 'U_NURIA',
+      };
       const id = mapa[email];
       if (!id) { const e = new Error('users_not_found'); e.data = { error: 'users_not_found' }; throw e; }
       return { user: { id } };
@@ -240,6 +245,25 @@ if (!reinvitado) {
   process.exit(1);
 }
 console.log('  reinvitado antes de publicar:', reinvitado[2]);
+
+console.log('--- PASADA 3f: anaden un solicitante al ticket ya abierto ---');
+actoresDel42.push({ users_id: 8, type: 1 });
+fueraDelCanal.add('U_NURIA');
+calls.splice(0);
+await pollOnce(fakeClient);
+const invitacionNueva = calls.find((c) => c[0] === 'invite' && c[2] === 'U_NURIA');
+if (!invitacionNueva) {
+  console.error('FALLO: un solicitante anadido despues deberia entrar al canal');
+  process.exit(1);
+}
+console.log('  invitado el solicitante nuevo:', invitacionNueva[2]);
+// Y no se le vuelve a invitar en cada sondeo.
+calls.splice(0);
+await pollOnce(fakeClient);
+if (calls.some((c) => c[0] === 'invite' && c[2] === 'U_NURIA')) {
+  console.error('FALLO: se esta reinvitando al mismo solicitante en cada ciclo');
+  process.exit(1);
+}
 
 console.log('--- PASADA 3d: el tecnico BORRA un seguimiento ya enviado ---');
 // Primero uno nuevo que si llegue a publicarse.
