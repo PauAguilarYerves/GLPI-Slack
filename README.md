@@ -372,6 +372,7 @@ compañeros → vaciar la lista.
 | `ALERT_CHANNEL` | vacío | Canal privado donde el puente avisa de sus propios fallos. El bot debe estar dentro. Vacío = solo log |
 | `ALERT_COOLDOWN_MINUTES` | `30` | Un mismo tipo de fallo no se repite antes de este tiempo |
 | `STUCK_ALERT_MINUTES` | `5` | Minutos que puede llevar el cursor sin avanzar por un ticket que falla antes de avisar |
+| `CONNECTION_GRACE_SECONDS` | `60` | Segundos que GLPI puede llevar inalcanzable antes de avisar. Los parpadeos de red no generan aviso |
 | `ALLOWED_REQUESTER_EMAILS` | vacío | Lista blanca de solicitantes. Vacío = todos |
 | `DRY_RUN` | `false` | Solo registra en el log lo que haría |
 | `ONLY_TICKETS_CREATED_AFTER_ACTIVATION` | `false` | `true` ignora los tickets anteriores a la activación aunque tengan actividad nueva |
@@ -495,7 +496,7 @@ docker compose run --rm glpi-slack-bridge node src/tools/test-alert.js
 
 | Aviso | Por qué importa |
 |---|---|
-| **El puente no puede consultar GLPI** | Token caducado, GLPI caído o red cortada. Mientras dure, nadie recibe nada |
+| **El puente no puede consultar GLPI** | Token caducado, GLPI caído o red cortada. Solo si dura más de `CONNECTION_GRACE_SECONDS`: un parpadeo de un ciclo no avisa |
 | **Un usuario no recibe sus tickets** | Su correo de GLPI no existe en Slack. Es el fallo que nadie reporta: el afectado ni sabe que esta integración existe |
 | **Un adjunto no llegó** | Un documento de GLPI que no se pudo bajar o subir |
 | **No se pueden cerrar los canales** | Alguien cambió los permisos del workspace y las conversaciones de tickets cerrados siguen visibles |

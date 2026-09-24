@@ -679,6 +679,46 @@ export async function pollOnce(client) {
   store.setCursor(new Date(startedAt - config.pollOverlapMs).toISOString());
 }
 
+const CLAVE_FALLO = 'fallo_sondeo_desde';
+
+/**
+ * Decide si un fallo al hablar con GLPI merece un aviso. Los parpadeos de red
+ * duran un ciclo y se arreglan solos; lo que importa es que GLPI lleve un rato
+ * inalcanzable de verdad.
+ */
+export async function gestionarFalloDeSondeo(err) {
+  const desde = Number(store.getKv(CLAVE_FALLO) || 0);
+  const ahora = Date.now();
+
+  if (!desde) {
+    store.setKv(CLAVE_FALLO, String(ahora));
+    log.warn(
+      `Fallo al consultar GLPI: ${err.message}. `
+      + `Se avisara si persiste mas de ${config.connectionGraceSeconds}s.`,
+    );
+    return;
+  }
+
+  const segundos = Math.round((ahora - desde) / 1000);
+  if (segundos < config.connectionGraceSeconds) {
+    log.warn(`GLPI sigue sin responder (${segundos}s): ${err.message}`);
+    return;
+  }
+
+  await alerta(
+    'sondeo',
+    'El puente no puede consultar GLPI',
+    `${err.message}. Lleva ${segundos} segundos sin conexion. `
+    + 'Mientras dure, nadie recibe respuestas en Slack.',
+  );
+}
+
+/** El sondeo ha vuelto a funcionar: se olvida la racha de fallos. */
+export async function registrarSondeoCorrecto() {
+  if (store.getKv(CLAVE_FALLO)) store.deleteKv(CLAVE_FALLO);
+  await recuperado('sondeo', 'El puente vuelve a hablar con GLPI');
+}
+
 export function startPolling(client) {
   let running = false;
   const tick = async () => {
@@ -686,13 +726,9 @@ export function startPolling(client) {
     running = true;
     try {
       await pollOnce(client);
-      await recuperado('sondeo', 'El puente vuelve a hablar con GLPI');
+      await registrarSondeoCorrecto();
     } catch (err) {
-      await alerta(
-        'sondeo',
-        'El puente no puede consultar GLPI',
-        `${err.message}. Mientras dure, nadie recibe respuestas en Slack.`,
-      );
+      await gestionarFalloDeSondeo(err);
     } finally {
       running = false;
     }

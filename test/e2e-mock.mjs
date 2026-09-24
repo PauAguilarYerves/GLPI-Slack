@@ -147,6 +147,7 @@ const fakeClient = {
 const store = await import('../src/store.js');
 const { pollOnce, bootstrapCursor } = await import('../src/poller.js');
 const { configurarAlertas } = await import('../src/alerts.js');
+const { gestionarFalloDeSondeo, registrarSondeoCorrecto } = await import('../src/poller.js');
 const { glpi } = await import('../src/glpi.js');
 const { slackToGlpiHtml } = await import('../src/format.js');
 
@@ -424,4 +425,36 @@ if (acciones.indexOf('kick') > acciones.indexOf('archive')) {
   console.error('FALLO: se expulso despues de archivar; en un canal archivado ya no se puede');
   process.exit(1);
 }
+console.log('--- PASADA 8: un parpadeo de red no debe avisar, un corte si ---');
+const fallo = new Error('fetch failed');
+
+calls.splice(0);
+await gestionarFalloDeSondeo(fallo);          // primer fallo
+await registrarSondeoCorrecto();              // se recupera al ciclo siguiente
+if (calls.some((c) => c[1] === 'C_ALERTAS')) {
+  console.error('FALLO: un parpadeo de un ciclo no deberia avisar');
+  process.exit(1);
+}
+console.log('  parpadeo de un ciclo: 0 mensajes, correcto');
+
+// Un corte que persiste mas alla del margen si tiene que avisar.
+await gestionarFalloDeSondeo(fallo);
+store.setKv('fallo_sondeo_desde', String(Date.now() - 120000));   // lleva 2 minutos
+calls.splice(0);
+await gestionarFalloDeSondeo(fallo);
+const avisoCorte = calls.find((c) => c[1] === 'C_ALERTAS');
+if (!avisoCorte) {
+  console.error('FALLO: un corte prolongado deberia avisar');
+  process.exit(1);
+}
+console.log('  corte de 2 minutos:', String(avisoCorte[2]).slice(0, 70));
+
+// Y al volver, el aviso de recuperacion.
+calls.splice(0);
+await registrarSondeoCorrecto();
+if (!calls.some((c) => c[1] === 'C_ALERTAS')) {
+  console.error('FALLO: deberia avisar de la recuperacion');
+  process.exit(1);
+}
+
 console.log('\nOK: el canal queda sin miembros humanos y archivado.');

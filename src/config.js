@@ -57,6 +57,11 @@ export const config = {
   // Si un ticket falla una y otra vez, el cursor deja de avanzar y con el se
   // para todo lo demas. Pasados estos minutos, hay que avisar.
   stuckAlertMinutes: int(process.env.STUCK_ALERT_MINUTES, 5),
+  // Un fallo de red que se arregla solo en unos segundos no es noticia. Solo se
+  // avisa si GLPI lleva inalcanzable al menos este tiempo: si no, con el sondeo
+  // cada pocos segundos cualquier parpadeo llenaria el canal y acabaria
+  // silenciado, que es peor que no tenerlo.
+  connectionGraceSeconds: int(process.env.CONNECTION_GRACE_SECONDS, 60),
   // archive = solo archivar (el usuario aun lo encuentra en "canales archivados")
   // purge   = borrar mensajes del bot + EXPULSAR a los miembros + archivar  <- desaparece
   // delete  = purge + admin.conversations.delete (solo Enterprise Grid)

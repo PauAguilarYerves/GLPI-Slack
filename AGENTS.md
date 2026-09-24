@@ -90,6 +90,10 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
 - **Comparar solicitantes cuesta caro.** `getRequesterKeys` hace una sola llamada y devuelve
   identificadores; solo cuando aparece alguien desconocido se resuelven correo y cuenta de
   Slack. No lo sustituyas por `getRequesters` en el bucle de sondeo.
+- **No avises de fallos transitorios.** Con el sondeo cada pocos segundos, un parpadeo de red
+  generaria un aviso cada vez. El fallo de conexion espera a persistir
+  `CONNECTION_GRACE_SECONDS`; si anades otro aviso de algo que puede fallar y arreglarse solo,
+  dale el mismo trato.
 - **Los avisos al equipo no miran la lista blanca**, a diferencia de todo lo demas: al equipo
   le interesan todos los tickets, a los usuarios solo el suyo.
 - **Tres capas de anti-bucle** (`seen_followups`, `GLPI_BRIDGE_USER_ID`, `bot_id`). Si tocas el
