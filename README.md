@@ -271,6 +271,7 @@ npm run check
 | `npm start` | Arranca el puente |
 | `npm run alert:test` | Manda un aviso de prueba al canal de alertas |
 | `npm run cursor:reset` | Fija el cursor en «ahora»: descarta lo acumulado durante una parada |
+| `npm run dev` | Como `npm start`, pero reiniciando al guardar cambios |
 
 Verifica credenciales, el perfil de GLPI, la visibilidad de tickets, los scopes de Slack y que
 los correos de la lista blanca existen en ambos sistemas. **No arranques hasta que dé `Todo listo`.**
@@ -656,11 +657,13 @@ src/
   format.js      Conversión HTML de GLPI ⇄ mrkdwn de Slack
   alerts.js      Avisos de los fallos del propio puente, con agrupado
   config.js      Lectura y validación del entorno
+  log.js         Log con niveles
   tools/
     preflight.js    npm run check
     healthcheck.js  Sonda para Docker
     test-alert.js   npm run alert:test
     reset-cursor.js npm run cursor:reset
 test/
+  run-e2e-mock.js   npm test: lanza la prueba con un entorno de juguete
   e2e-mock.mjs      Ciclo completo con GLPI y Slack simulados
 ```

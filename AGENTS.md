@@ -77,6 +77,21 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
 - **Los avisos de fallo se agrupan por tipo.** Con el sondeo cada pocos segundos, publicar cada
   error inunda el canal y acaban silenciandolo. Si anades un aviso nuevo, dale un `tipo`
   estable y deja que `alerts.js` haga el enfriamiento.
+- **Slack archiva un canal privado en cuanto se queda sin miembros humanos**, y sobre un canal
+  archivado no se puede publicar ni invitar. Si el ticket sigue vivo hay que desarchivarlo, o
+  el puente entra en bucle sobre ese ticket y, como el cursor no avanza mientras algo falla,
+  bloquea la cola entera.
+- **Un 404 al consultar un ticket no es un fallo que reintentar**: es un ticket borrado, y de
+  su canal huerfano se ocupa el barrido. Contarlo como error bloquea el cursor para siempre.
+- **Lo que se deshace en GLPI hay que deshacerlo en Slack.** Un seguimiento marcado como
+  privado o borrado se retira, con sus adjuntos; por eso `bot_files` guarda de que seguimiento
+  vino cada fichero. Al retirarlo se marca `origin = 'retirado'` en vez de olvidarlo, para
+  poder republicarlo si vuelve a ser visible.
+- **Comparar solicitantes cuesta caro.** `getRequesterKeys` hace una sola llamada y devuelve
+  identificadores; solo cuando aparece alguien desconocido se resuelven correo y cuenta de
+  Slack. No lo sustituyas por `getRequesters` en el bucle de sondeo.
+- **Los avisos al equipo no miran la lista blanca**, a diferencia de todo lo demas: al equipo
+  le interesan todos los tickets, a los usuarios solo el suyo.
 - **Tres capas de anti-bucle** (`seen_followups`, `GLPI_BRIDGE_USER_ID`, `bot_id`). Si tocas el
   flujo de escritura, comprueba que ninguna se rompe: el síntoma es un ping-pong infinito.
 
