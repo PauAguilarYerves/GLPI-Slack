@@ -150,7 +150,11 @@ Guarda, vuelve a abrir el cliente y ahí aparece el token → `GLPI_APP_TOKEN`.
 Después, en su ficha:
 
 1. Pestaña **Autorizaciones**: asígnale el perfil **Técnico** (o un clon recortado) sobre la
-   entidad que corresponda, marcando **Recursivo** si hay subentidades.
+   entidad que corresponda, y marca **Recursivo** si hay subentidades.
+
+   > Sin recursivo, los tickets de las subentidades devuelven **403** y el puente sencillamente
+   > no se entera de que existen: ni avisos, ni canales, ni error visible. `npm run check` lo
+   > detecta y te dice cuántas entidades ve.
 2. Pestaña principal → campo **Token de API** → marca **Regenerar** y guarda. Al recargar
    aparece el token → `GLPI_USER_TOKEN`.
 3. La URL de la ficha contiene el id: `user.form.php?id=896` → `GLPI_BRIDGE_USER_ID=896`.
@@ -603,6 +607,7 @@ Tres capas:
 | Síntoma | Causa | Solución |
 |---|---|---|
 | `npm run check` dice **«la cuenta de servicio no ve NINGÚN ticket»** | La sesión entra con perfil Self-Service | Pon `GLPI_PROFILE_ID` con el id del perfil Técnico |
+| **Un ticket concreto no genera nada, y su `GET` da 403** | Está en una subentidad y la autorización no es recursiva | Marca **Recursivo** en la ficha del usuario de servicio. `npm run check` avisa de esto |
 | **No llega nada a Slack** y el log no da errores | El solicitante no está en `ALLOWED_REQUESTER_EMAILS`, o su correo no coincide entre GLPI y Slack | `npm run check` verifica los correos en ambos sistemas |
 | `users_not_found` | El correo de GLPI no existe en Slack | Corrige el correo en uno de los dos |
 | `missing_scope` | Falta un permiso en la app | Añádelo en *Bot Token Scopes* y **reinstala** la app |

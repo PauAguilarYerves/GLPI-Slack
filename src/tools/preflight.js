@@ -20,6 +20,28 @@ try {
   nota(`cuenta de servicio: ${sesion?.session?.glpiname || '?'} (users_id ${glpiID})`);
   const perfil = sesion?.session?.glpiactiveprofile?.name;
   nota(`perfil activo: ${perfil} | entidad: ${sesion?.session?.glpiactive_entity_name}`);
+
+  // Una autorizacion no recursiva deja fuera las subentidades: sus tickets
+  // devuelven 403 y el puente sencillamente no se entera de que existen.
+  // GLPI devuelve las entidades unas veces como array, otras como objeto, y
+  // ademas en una version _string. Se normaliza para poder contarlas.
+  const crudo = sesion?.session?.glpiactiveentities;
+  const entidades = Array.isArray(crudo)
+    ? crudo
+    : (crudo && typeof crudo === 'object')
+      ? Object.values(crudo)
+      : String(sesion?.session?.glpiactiveentities_string || '')
+        .split(',').map((x) => x.trim()).filter(Boolean);
+  const recursivo = Number(sesion?.session?.glpiactive_entity_recursive) === 1;
+  if (!recursivo) {
+    ko(
+      `la autorizacion NO es recursiva: solo ve ${entidades.length} entidad(es). `
+      + 'Los tickets de las subentidades son invisibles para el puente. '
+      + 'Marca "Recursivo" en la ficha del usuario, pestana Autorizaciones.',
+    );
+  } else {
+    ok(`autorizacion recursiva sobre ${entidades.length} entidad(es)`);
+  }
   if (/self.?service/i.test(perfil || '')) {
     ko('el perfil Self-Service solo ve los tickets propios: el puente no vera nada');
   }
