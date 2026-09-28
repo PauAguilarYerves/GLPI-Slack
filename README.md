@@ -373,6 +373,7 @@ compañeros → vaciar la lista.
 | `ALERT_COOLDOWN_MINUTES` | `30` | Un mismo tipo de fallo no se repite antes de este tiempo |
 | `STUCK_ALERT_MINUTES` | `5` | Minutos que puede llevar el cursor sin avanzar por un ticket que falla antes de avisar |
 | `CONNECTION_GRACE_SECONDS` | `60` | Segundos que GLPI puede llevar inalcanzable antes de avisar. Los parpadeos de red no generan aviso |
+| `NOTIFY_CHANNEL_OPENED` | `false` | Avisa en el canal de alertas cada vez que se abre un canal de ticket. Para vigilar los primeros días de un despliegue |
 | `ALLOWED_REQUESTER_EMAILS` | vacío | Lista blanca de solicitantes. Vacío = todos |
 | `DRY_RUN` | `false` | Solo registra en el log lo que haría |
 | `ONLY_TICKETS_CREATED_AFTER_ACTIVATION` | `false` | `true` ignora los tickets anteriores a la activación aunque tengan actividad nueva |

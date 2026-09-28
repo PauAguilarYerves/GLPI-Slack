@@ -62,6 +62,9 @@ export const config = {
   // cada pocos segundos cualquier parpadeo llenaria el canal y acabaria
   // silenciado, que es peor que no tenerlo.
   connectionGraceSeconds: int(process.env.CONNECTION_GRACE_SECONDS, 60),
+  // Avisar en ALERT_CHANNEL cada vez que se abre un canal de ticket. No es un
+  // fallo: sirve para vigilar el arranque los primeros dias y luego se apaga.
+  notifyChannelOpened: bool(process.env.NOTIFY_CHANNEL_OPENED, false),
   // archive = solo archivar (el usuario aun lo encuentra en "canales archivados")
   // purge   = borrar mensajes del bot + EXPULSAR a los miembros + archivar  <- desaparece
   // delete  = purge + admin.conversations.delete (solo Enterprise Grid)

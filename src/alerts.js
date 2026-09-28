@@ -79,6 +79,17 @@ export async function alerta(tipo, titulo, detalle = null) {
   ], COLOR_FALLO);
 }
 
+/**
+ * Nota informativa al canal de alertas, sin agrupar y sin marcar nada como
+ * fallo. Para vigilar la actividad los primeros dias de un despliegue.
+ */
+export async function nota(texto, detalle = null) {
+  await publicar(texto, [
+    { type: 'section', text: { type: 'mrkdwn', text: `:eyes:  ${texto}` } },
+    ...(detalle ? [{ type: 'context', elements: [{ type: 'mrkdwn', text: detalle }] }] : []),
+  ], '#8d8d8d');
+}
+
 /** Lo que estaba fallando ha vuelto a funcionar. Solo avisa si habia alerta. */
 export async function recuperado(tipo, titulo) {
   const clave = claveDe(tipo);

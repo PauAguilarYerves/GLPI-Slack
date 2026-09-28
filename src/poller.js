@@ -3,7 +3,7 @@ import { config, CLOSED_STATUSES } from './config.js';
 import { log } from './log.js';
 import * as store from './store.js';
 import { glpi, glpiDateToIso, glpiTicketUrl as ticketUrl } from './glpi.js';
-import { alerta, recuperado } from './alerts.js';
+import { alerta, recuperado, nota } from './alerts.js';
 import { glpiHtmlToSlack, extractGlpiDocIds } from './format.js';
 import {
   ensureConversation, postToConversation, cleanupConversation, uploadDocuments,
@@ -278,6 +278,12 @@ async function handleNewTicket(client, ticket, sinceMs) {
     color: COLORES.apertura,
   });
   log.info(`Ticket ${ticket.id} recien creado: canal abierto en ${conversation.channel_id}`);
+  if (config.notifyChannelOpened) {
+    await nota(
+      `Canal abierto para el ticket #${ticket.id}`,
+      `<#${conversation.channel_id}> · ${ticket.name || ''}`,
+    );
+  }
 
   await enviarAdjuntos(client, conversation, [...new Set([
     ...extractGlpiDocIds(ticket.content),
