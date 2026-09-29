@@ -95,6 +95,10 @@ export const config = {
     .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean),
   // Avisar al tecnico asignado de cada respuesta que reciben sus tickets.
   notifyTicketReplies: bool(process.env.NOTIFY_TICKET_REPLIES, false),
+  // Minutos de espera antes de avisar al tecnico de una respuesta. Si para
+  // entonces ya ha contestado, el aviso se descarta; y si el usuario ha escrito
+  // varias veces, llega uno solo. 0 = avisar al momento.
+  replyNoticeDelayMinutes: int(process.env.REPLY_NOTICE_DELAY_MINUTES, 0),
   cleanupDelayMs: process.env.CLEANUP_DELAY_SECONDS
     ? int(process.env.CLEANUP_DELAY_SECONDS, 0) * 1000
     : int(process.env.CLEANUP_DELAY_MINUTES, 0) * 60 * 1000,

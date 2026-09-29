@@ -99,6 +99,9 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
 - **Los seguimientos que vienen de Slack los firma la cuenta de servicio**, no quien los
   escribio. Para cualquier decision que dependa del autor real —como no avisar a alguien de
   su propio mensaje— hay que mirar `outbound_messages.slack_user_id`, no `users_id`.
+- **Para saber si algo es posterior a otra cosa, compara ids, no fechas.** GLPI guarda las
+  fechas al segundo, asi que una respuesta rapida cae en el mismo segundo que la pregunta.
+  Los ids de seguimiento son crecientes y no tienen ese problema.
 - **Los avisos al equipo no miran la lista blanca**, a diferencia de todo lo demas: al equipo
   le interesan todos los tickets, a los usuarios solo el suyo.
 - **Tres capas de anti-bucle** (`seen_followups`, `GLPI_BRIDGE_USER_ID`, `bot_id`). Si tocas el

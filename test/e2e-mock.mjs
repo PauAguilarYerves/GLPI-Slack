@@ -301,6 +301,53 @@ if (calls.some((c) => c[1] === 'U_MARTA' && c[0] === 'postMessage')) {
 }
 console.log('  no se avisa a nadie de sus propios mensajes: correcto');
 
+console.log('--- PASADA 3h: el aviso espera, y se descarta si ya han contestado ---');
+followups.push({
+  id: 9700, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 5,
+  content: '<p>¿Alguna novedad?</p>', date_creation: glpiNow(1700),
+});
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+if (calls.some((c) => c[1] === 'U_MARTA' && c[0] === 'postMessage')) {
+  console.error('FALLO: con retardo configurado no deberia avisar al momento');
+  process.exit(1);
+}
+console.log('  con retardo: no avisa al momento, correcto');
+
+// Vence la espera y nadie ha contestado: ahora si avisa, y una sola vez.
+store.setKv('x', 'x');
+const bd = (await import('node:sqlite')).DatabaseSync;
+new bd(process.env.DB_PATH).prepare('UPDATE pending_notices SET due_at = ?').run(new Date(Date.now()-1000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+const avisoRetardado = calls.find((c) => c[1] === 'U_MARTA' && c[0] === 'postMessage');
+if (!avisoRetardado) {
+  console.error('FALLO: vencida la espera deberia avisar');
+  process.exit(1);
+}
+console.log('  vencida la espera: avisa');
+
+// Y si la tecnica contesta antes de vencer, el aviso se descarta.
+followups.push({
+  id: 9710, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 5,
+  content: '<p>Sigo esperando.</p>', date_creation: glpiNow(1800),
+});
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+await pollOnce(fakeClient);                       // encola
+followups.push({
+  id: 9720, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 7,
+  content: '<p>Lo miro ahora mismo.</p>', date_creation: glpiNow(60000),
+});
+new bd(process.env.DB_PATH).prepare('UPDATE pending_notices SET due_at = ?').run(new Date(Date.now()-1000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+if (calls.some((c) => c[1] === 'U_MARTA' && c[0] === 'postMessage')) {
+  console.error('FALLO: si ya ha contestado, el aviso debe descartarse');
+  process.exit(1);
+}
+console.log('  ya contestado: aviso descartado, correcto');
+
 console.log('--- PASADA 3d: el tecnico BORRA un seguimiento ya enviado ---');
 // Primero uno nuevo que si llegue a publicarse.
 followups.push({

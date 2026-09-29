@@ -226,11 +226,22 @@ async function avisarTecnicoDeRespuestas(client, ticket, followups, sinceMs) {
   for (const f of nuevos) {
     store.markTechNotified(Number(f.id), ticket.id);
 
-    // Su propia respuesta no se la contamos a el. Ojo: los seguimientos que
-    // llegan desde Slack los firma la cuenta de servicio, asi que hay que mirar
-    // ademas quien los escribio de verdad, o se avisa a la gente de si misma.
+    // Su propia respuesta no se la contamos a el, ni se encola. Ojo: los
+    // seguimientos que llegan desde Slack los firma la cuenta de servicio, asi
+    // que hay que mirar ademas quien los escribio de verdad.
     if (tecnico?.users_id && Number(f.users_id) === Number(tecnico.users_id)) continue;
     if (tecnicoSlackId && store.getOutboundAuthor(Number(f.id)) === tecnicoSlackId) continue;
+
+    // Con retardo configurado, el aviso espera: si el tecnico contesta antes de
+    // que venza, se descarta.
+    if (config.replyNoticeDelayMinutes > 0) {
+      store.addPendingNotice(
+        Number(f.id),
+        ticket.id,
+        new Date(Date.now() + config.replyNoticeDelayMinutes * 60000).toISOString(),
+      );
+      continue;
+    }
 
     const autor = Number(f.users_id) === config.glpi.bridgeUserId
       ? (await glpi.getRequesters(ticket.id, ticket).catch(() => []))[0]?.name || 'El solicitante'
@@ -244,6 +255,79 @@ async function avisarTecnicoDeRespuestas(client, ticket, followups, sinceMs) {
       }),
     });
     log.info(`Ticket ${ticket.id}: avisado del seguimiento ${f.id} al tecnico asignado`);
+  }
+}
+
+/**
+ * Vacia la cola de avisos que ya han cumplido su espera. Por cada ticket manda
+ * uno solo, y solo si el tecnico no ha contestado mientras tanto: un aviso de
+ * algo que ya has visto es ruido, y cinco avisos de la misma conversacion
+ * tambien.
+ */
+async function procesarAvisosPendientes(client) {
+  if (!config.notifyTicketReplies || config.replyNoticeDelayMinutes <= 0) return;
+
+  for (const ticketId of store.listDueNoticeTickets(new Date().toISOString())) {
+    const pendientes = store.listPendingNotices(ticketId);
+    if (pendientes.length === 0) continue;
+
+    try {
+      const ticket = await glpi.getTicket(ticketId);
+
+      if (CLOSED_STATUSES.includes(Number(ticket.status))) {
+        store.clearPendingNotices(ticketId);
+        log.debug(`Ticket ${ticketId}: cerrado mientras esperaba el aviso, descartado`);
+        continue;
+      }
+
+      const followups = await glpi.getFollowups(ticketId);
+      const porId = new Map(followups.map((f) => [Number(f.id), f]));
+      const ultimoPendiente = pendientes
+        .map((p) => porId.get(p.followup_id))
+        .filter(Boolean)
+        .sort((a, b) => Number(a.id) - Number(b.id))
+        .at(-1);
+      if (!ultimoPendiente) { store.clearPendingNotices(ticketId); continue; }
+
+      const tecnico = await glpi.getAssignedTechnician(ticketId);
+
+      // ¿Ha contestado ya el tecnico? Se compara por id de seguimiento, no por
+      // fecha: los ids de GLPI son crecientes, mientras que las fechas van al
+      // segundo y una respuesta rapida cae en el mismo segundo que la pregunta.
+      const desdeId = Number(ultimoPendiente.id);
+      const yaContestado = Boolean(tecnico?.users_id) && followups.some(
+        (f) => Number(f.users_id) === Number(tecnico.users_id) && Number(f.id) > desdeId,
+      );
+      if (yaContestado) {
+        store.clearPendingNotices(ticketId);
+        log.info(`Ticket ${ticketId}: ya contestado, aviso descartado`);
+        continue;
+      }
+
+      const tecnicoSlackId = tecnico?.email
+        ? await findSlackUserByEmail(client, tecnico.email)
+        : null;
+      const autor = Number(ultimoPendiente.users_id) === config.glpi.bridgeUserId
+        ? (await glpi.getRequesters(ticketId, ticket).catch(() => []))[0]?.name || 'El solicitante'
+        : await authorNameOf(Number(ultimoPendiente.users_id));
+
+      await avisarSoporte(client, {
+        tecnicoSlackId,
+        texto: `Respuesta sin contestar en el ticket #${ticketId}`,
+        blocks: respuestaEnTicketBlocks({
+          ticket,
+          autor,
+          texto: glpiHtmlToSlack(ultimoPendiente.content),
+          glpiTicketUrl: ticketUrl(ticketId),
+          cuantos: pendientes.length,
+        }),
+      });
+      store.clearPendingNotices(ticketId);
+      log.info(`Ticket ${ticketId}: avisado de ${pendientes.length} mensaje(s) sin contestar`);
+    } catch (err) {
+      if (err.status === 404) { store.clearPendingNotices(ticketId); continue; }
+      log.warn(`No se pudo procesar el aviso pendiente del ticket ${ticketId}: ${err.message}`);
+    }
   }
 }
 
@@ -659,6 +743,10 @@ export async function pollOnce(client) {
       );
     }
   }
+
+  await procesarAvisosPendientes(client).catch(
+    (err) => log.error('Fallo procesando los avisos pendientes:', err.message),
+  );
 
   await runCleanups(client);
   store.setHeartbeat();

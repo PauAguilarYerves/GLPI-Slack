@@ -797,7 +797,7 @@ export function nuevoTicketBlocks({ ticket, solicitante, categoria, glpiTicketUr
 }
 
 /** Alguien ha respondido en un ticket que tienes asignado. */
-export function respuestaEnTicketBlocks({ ticket, autor, texto, glpiTicketUrl }) {
+export function respuestaEnTicketBlocks({ ticket, autor, texto, glpiTicketUrl, cuantos = 1 }) {
   const blocks = [
     {
       type: 'section',
@@ -811,7 +811,8 @@ export function respuestaEnTicketBlocks({ ticket, autor, texto, glpiTicketUrl })
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*${escapeSlack(autor || 'El solicitante')}* escribe:\n`
+        text: `*${escapeSlack(autor || 'El solicitante')}* escribe`
+          + `${cuantos > 1 ? ` _(${cuantos} mensajes)_` : ''}:\n`
           + `>${truncate(String(texto || '').replace(/\n/g, '\n>'), 800)}`,
       },
     },

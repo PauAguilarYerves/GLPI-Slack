@@ -359,6 +359,7 @@ compañeros → vaciar la lista.
 | `NOTIFY_NEW_TICKETS` | `false` | Avisa de cada ticket nuevo que entra en GLPI |
 | `NEW_TICKET_RECIPIENTS` | vacío | Correos que reciben ese aviso por mensaje directo. Vacío = se usa `TEAM_CHANNEL` |
 | `NOTIFY_TICKET_REPLIES` | `false` | Avisa al técnico asignado de cada respuesta en sus tickets |
+| `REPLY_NOTICE_DELAY_MINUTES` | `0` | Minutos de espera antes de ese aviso. Si contesta antes, se descarta; los mensajes seguidos se agrupan en uno. `0` = al momento |
 | `TEAM_CHANNEL` | vacío | Canal del equipo para los avisos sin técnico asignado. El bot debe estar dentro |
 
 ### Sondeo y seguridad
@@ -523,6 +524,11 @@ NOTIFY_TICKET_REPLIES=true
 |---|---|
 | **Ticket nuevo** | Por mensaje directo a los correos de `NEW_TICKET_RECIPIENTS`. Un ticket recién entrado no tiene asignado, así que hay que decir a quién avisar |
 | **Respuesta en tu ticket** | Por mensaje directo al técnico asignado. Incluye las respuestas que llegan desde Slack, que antes solo se veían entrando en GLPI |
+
+Con `REPLY_NOTICE_DELAY_MINUTES` el aviso de respuesta **espera unos minutos antes de salir**:
+si el técnico contesta mientras tanto, se descarta, y si el usuario escribe varias veces
+seguidas llega uno solo con el recuento. A nadie se le avisa de sus propios mensajes, tampoco
+de los que escribe desde Slack —que en GLPI los firma la cuenta de servicio—.
 
 Si un ticket recibe respuesta y no tiene técnico asignado, el aviso cae en `TEAM_CHANNEL`
 como red de seguridad, o se pierde si está vacío.

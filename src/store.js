@@ -92,6 +92,15 @@ CREATE TABLE IF NOT EXISTS ticket_requesters (
   PRIMARY KEY (ticket_id, actor_key)
 );
 
+-- Avisos al tecnico en espera: se retrasan unos minutos y se descartan si para
+-- entonces ya ha contestado. Asi ni se avisa de lo que uno ya ha visto, ni
+-- llega un mensaje por cada linea que escriba el usuario.
+CREATE TABLE IF NOT EXISTS pending_notices (
+  followup_id INTEGER PRIMARY KEY,
+  ticket_id   INTEGER NOT NULL,
+  due_at      TEXT NOT NULL
+);
+
 -- Idempotencia + anti-bucle: todo seguimiento ya procesado (o creado por el puente).
 CREATE TABLE IF NOT EXISTS seen_followups (
   followup_id INTEGER PRIMARY KEY,
@@ -351,6 +360,23 @@ export function markTicketAnnounced(ticketId) {
   db.prepare('INSERT OR IGNORE INTO announced_tickets (ticket_id, announced_at) VALUES (?, ?)')
     .run(ticketId, new Date().toISOString());
 }
+export function addPendingNotice(followupId, ticketId, dueAtIso) {
+  db.prepare('INSERT OR IGNORE INTO pending_notices (followup_id, ticket_id, due_at) VALUES (?, ?, ?)')
+    .run(followupId, ticketId, dueAtIso);
+}
+/** Tickets con avisos que ya han cumplido su espera. */
+export function listDueNoticeTickets(nowIso) {
+  return db.prepare('SELECT DISTINCT ticket_id FROM pending_notices WHERE due_at <= ?')
+    .all(nowIso).map((r) => r.ticket_id);
+}
+export function listPendingNotices(ticketId) {
+  return db.prepare('SELECT * FROM pending_notices WHERE ticket_id = ? ORDER BY followup_id')
+    .all(ticketId);
+}
+export function clearPendingNotices(ticketId) {
+  db.prepare('DELETE FROM pending_notices WHERE ticket_id = ?').run(ticketId);
+}
+
 export function isTechNotified(followupId) {
   return db.prepare('SELECT 1 AS hit FROM tech_notifications WHERE followup_id = ?')
     .get(followupId) !== undefined;
