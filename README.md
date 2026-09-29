@@ -23,6 +23,7 @@ la conversación cuando el ticket se resuelve.
 |---|---|
 | Se crea un ticket | Se abre un canal privado con sus solicitantes y se publica la solicitud |
 | Se añade un solicitante después | Entra al canal en el siguiente sondeo |
+| Se asigna un técnico | Entra al canal, si `INVITE_TECHNICIAN` está activo |
 | El técnico añade un seguimiento | Llega al canal, con sus adjuntos |
 | El técnico edita un seguimiento | Se reescribe el mensaje, marcado como editado |
 | El técnico lo marca como privado, o lo borra | Se retira de Slack, con sus adjuntos. Si vuelve a ser visible, reaparece |
@@ -341,7 +342,7 @@ compañeros → vaciar la lista.
 | `CHANNEL_INCLUDE_TITLE` | `false` | Añade el título del ticket al nombre |
 | `REPLY_MODE` | `inline` | `inline` (escribir en el canal) o `modal` (botón + ventana; no deja ningún mensaje humano en el canal) |
 | `MESSAGE_COLORS` | `true` | Barra de color lateral por tipo de mensaje |
-| `INVITE_TECHNICIAN` | `false` | Invita también al técnico asignado al canal |
+| `INVITE_TECHNICIAN` | `false` | Mete al técnico asignado en el canal del ticket, también si se le asigna después de crearlo |
 | `REINVITE_ON_REPLY` | `true` | Si el solicitante se salió del canal y el técnico responde, se le vuelve a invitar |
 | `HISTORY_MESSAGES` | `3` | Mensajes previos que se resumen al abrir el canal de un ticket que ya existía |
 

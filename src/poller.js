@@ -125,35 +125,41 @@ async function crearConversacion(client, ticket) {
  * tambien en la conversacion. Se compara con una sola llamada a GLPI: solo
  * cuando aparece alguien nuevo se resuelve su correo y su cuenta de Slack.
  */
-async function sincronizarSolicitantes(client, ticket, conversation) {
+async function sincronizarActores(client, ticket, conversation) {
   if (config.mode !== 'channel' || conversation.cleaned_at) return;
 
-  const claves = await glpi.getRequesterKeys(ticket.id).catch(() => []);
-  const nuevas = claves.filter((k) => !store.isRequesterKnown(ticket.id, k));
-  if (nuevas.length === 0) return;
+  // Los tecnicos casi nunca estan asignados cuando se crea el ticket, asi que
+  // no basta con invitarlos al abrir el canal: hay que mirarlo en cada pasada.
+  const tipos = config.inviteTechnician ? [1, 2] : [1];
+  const actores = await glpi.getActorKeys(ticket.id, tipos).catch(() => []);
+  const nuevos = actores.filter((a) => !store.isRequesterKnown(ticket.id, a.clave));
+  if (nuevos.length === 0) return;
 
   // Ya sabemos que hay alguien nuevo: ahora si toca resolver quien es.
-  const requesters = await glpi.getRequesters(ticket.id, ticket);
   const allow = config.allowedRequesterEmails;
 
-  for (const clave of nuevas) {
-    store.rememberRequester(ticket.id, clave);
+  for (const actor of nuevos) {
+    store.rememberRequester(ticket.id, actor.clave);
 
-    const r = requesters.find(
-      (x) => String(x.users_id) === clave || `email:${x.email}` === clave,
-    );
-    if (!r?.email) continue;
+    const esSolicitante = actor.tipo === 1;
+    const persona = esSolicitante
+      ? (await glpi.getRequesters(ticket.id, ticket))
+        .find((x) => String(x.users_id) === actor.quien || `email:${x.email}` === actor.quien)
+      : await glpi.resolverUsuario(Number(actor.quien));
+    if (!persona?.email) continue;
 
-    // Con lista blanca activa, un solicitante anadido que no este en ella no
-    // entra: si no, un ticket compartido colaria gente fuera del piloto.
-    if (allow.length > 0 && !allow.includes(r.email.toLowerCase())) {
-      log.info(`Ticket ${ticket.id}: ${r.email} anadido como solicitante pero fuera de la lista blanca`);
+    const papel = esSolicitante ? 'solicitante' : 'tecnico asignado';
+
+    // La lista blanca es para los solicitantes: acota a quien ve el puente por
+    // su lado de usuario, no al equipo que atiende el ticket.
+    if (esSolicitante && allow.length > 0 && !allow.includes(persona.email.toLowerCase())) {
+      log.info(`Ticket ${ticket.id}: ${persona.email} anadido como ${papel} pero fuera de la lista blanca`);
       continue;
     }
 
-    const slackId = await findSlackUserByEmail(client, r.email);
+    const slackId = await findSlackUserByEmail(client, persona.email);
     if (!slackId) {
-      log.warn(`Ticket ${ticket.id}: ${r.email} anadido como solicitante pero sin cuenta de Slack`);
+      log.warn(`Ticket ${ticket.id}: ${persona.email} (${papel}) no tiene cuenta de Slack`);
       continue;
     }
     if (store.isInvited(conversation.channel_id, slackId)) continue;
@@ -164,7 +170,7 @@ async function sincronizarSolicitantes(client, ticket, conversation) {
         if (!['already_in_channel', 'cant_invite_self'].includes(err?.data?.error)) throw err;
       });
     store.rememberInvited(conversation.channel_id, slackId);
-    log.info(`Ticket ${ticket.id}: ${r.email} anadido como solicitante, invitado al canal`);
+    log.info(`Ticket ${ticket.id}: ${persona.email} entra al canal como ${papel}`);
   }
 }
 
@@ -623,7 +629,7 @@ export async function pollOnce(client) {
       await handleNewTicket(client, ticket, sinceMs);
 
       const viva = store.getConversationByTicket(ticket.id);
-      if (viva && !viva.cleaned_at) await sincronizarSolicitantes(client, ticket, viva);
+      if (viva && !viva.cleaned_at) await sincronizarActores(client, ticket, viva);
 
       await handleNewFollowups(client, ticket, sinceMs);
     } catch (err) {

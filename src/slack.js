@@ -191,9 +191,12 @@ export async function ensureConversation(client, { ticket, requesters, technicia
     });
   // Queda constancia de a quien hemos invitado: el resto sobra en este canal.
   invitees.forEach((u) => store.rememberInvited(channelId, u));
-  // Y de que solicitantes habia ya, para detectar despues a los que se anadan.
+  // Y de que actores habia ya, para detectar despues a los que se anadan.
   for (const r of requesters) {
-    store.rememberRequester(ticket.id, r.users_id ? String(r.users_id) : `email:${r.email}`);
+    store.rememberRequester(ticket.id, `1:${r.users_id ? r.users_id : `email:${r.email}`}`);
+  }
+  if (technician?.users_id && technician.slackUserId) {
+    store.rememberRequester(ticket.id, `2:${technician.users_id}`);
   }
 
   store.saveConversation({

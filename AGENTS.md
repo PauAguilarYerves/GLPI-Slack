@@ -87,9 +87,11 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
   privado o borrado se retira, con sus adjuntos; por eso `bot_files` guarda de que seguimiento
   vino cada fichero. Al retirarlo se marca `origin = 'retirado'` en vez de olvidarlo, para
   poder republicarlo si vuelve a ser visible.
-- **Comparar solicitantes cuesta caro.** `getRequesterKeys` hace una sola llamada y devuelve
+- **Comparar actores cuesta caro.** `getActorKeys` hace una sola llamada y devuelve
   identificadores; solo cuando aparece alguien desconocido se resuelven correo y cuenta de
   Slack. No lo sustituyas por `getRequesters` en el bucle de sondeo.
+- **Los actores se asignan despues.** Un ticket recien creado casi nunca tiene tecnico, asi
+  que invitar solo al crear el canal no sirve: hay que comparar en cada pasada.
 - **No avises de fallos transitorios.** Con el sondeo cada pocos segundos, un parpadeo de red
   generaria un aviso cada vez. El fallo de conexion espera a persistir
   `CONNECTION_GRACE_SECONDS`; si anades otro aviso de algo que puede fallar y arreglarse solo,

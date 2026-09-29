@@ -12,8 +12,9 @@ let ticketStatus = 2;
 let ticketBorrado = false;
 // Tickets extra que aparecen a mitad de la prueba (alta reciente).
 const extras = new Map();
-// Dos solicitantes (type 1) y un tecnico asignado (type 2).
-const actoresDel42 = [{ users_id: 5, type: 1 }, { users_id: 6, type: 1 }, { users_id: 7, type: 2 }];
+// Dos solicitantes (type 1). El tecnico se asigna mas adelante, como en la
+// realidad: un ticket recien abierto casi nunca lo tiene.
+const actoresDel42 = [{ users_id: 5, type: 1 }, { users_id: 6, type: 1 }];
 const createdFollowups = [];
 let followups = [{
   id: 9001, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 7,
@@ -265,6 +266,18 @@ if (calls.some((c) => c[0] === 'invite' && c[2] === 'U_NURIA')) {
   console.error('FALLO: se esta reinvitando al mismo solicitante en cada ciclo');
   process.exit(1);
 }
+
+console.log('--- PASADA 3g: asignan un tecnico al ticket ---');
+actoresDel42.push({ users_id: 7, type: 2 });
+fueraDelCanal.add('U_MARTA');
+calls.splice(0);
+await pollOnce(fakeClient);
+const tecnicoInvitado = calls.find((c) => c[0] === 'invite' && c[2] === 'U_MARTA');
+if (process.env.INVITE_TECHNICIAN === 'true' && !tecnicoInvitado) {
+  console.error('FALLO: con INVITE_TECHNICIAN el tecnico asignado deberia entrar al canal');
+  process.exit(1);
+}
+console.log('  tecnico en el canal:', tecnicoInvitado ? tecnicoInvitado[2] : '(desactivado)');
 
 console.log('--- PASADA 3d: el tecnico BORRA un seguimiento ya enviado ---');
 // Primero uno nuevo que si llegue a publicarse.

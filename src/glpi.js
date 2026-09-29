@@ -254,14 +254,19 @@ export class GlpiClient {
   }
 
   /**
-   * Clave estable de cada solicitante, sin resolver correos ni nombres: una
-   * sola llamada, suficiente para saber si han anadido a alguien.
+   * Clave estable de cada actor del ticket, sin resolver correos ni nombres:
+   * una sola llamada, suficiente para saber si han anadido a alguien.
+   * tipos: 1 = solicitante, 2 = asignado, 3 = observador.
    */
-  async getRequesterKeys(ticketId) {
+  async getActorKeys(ticketId, tipos = [1]) {
     const actors = await this.getTicketUsers(ticketId);
     return actors
-      .filter((a) => Number(a.type) === 1 && (Number(a.users_id) || a.alternative_email))
-      .map((a) => (Number(a.users_id) ? String(a.users_id) : `email:${a.alternative_email}`));
+      .filter((a) => tipos.includes(Number(a.type)))
+      .filter((a) => Number(a.users_id) || a.alternative_email)
+      .map((a) => {
+        const quien = Number(a.users_id) ? String(a.users_id) : `email:${a.alternative_email}`;
+        return { tipo: Number(a.type), quien, clave: `${a.type}:${quien}` };
+      });
   }
 
   /** El solicitante principal: el primero que devuelve GLPI. */

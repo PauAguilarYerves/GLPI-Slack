@@ -19,7 +19,7 @@ const res = spawnSync(process.execPath, [new URL('./e2e-mock.mjs', import.meta.u
     // rellena lo que no venga ya definido).
     REPLY_MODE: 'inline', CHANNEL_PREFIX: 'ticket-', CHANNEL_INCLUDE_TITLE: 'true', DRY_RUN: 'false', ALLOWED_REQUESTER_EMAILS: '',
     CLEANUP_DELAY_MINUTES: '0', CLEANUP_DELAY_SECONDS: '', ONLY_TICKETS_CREATED_AFTER_ACTIVATION: 'false',
-    INVITE_TECHNICIAN: 'false', SLACK_ADMIN_TOKEN: '', POLL_OVERLAP_SECONDS: '60',
+    INVITE_TECHNICIAN: 'true', SLACK_ADMIN_TOKEN: '', POLL_OVERLAP_SECONDS: '60',
   },
 });
 process.exit(res.status ?? 1);
