@@ -1,4 +1,5 @@
 import { WebClient } from '@slack/web-api';
+import { emojify } from 'node-emoji';
 import { config } from './config.js';
 import { log } from './log.js';
 import * as store from './store.js';
@@ -100,6 +101,11 @@ export async function formatearDesdeSlack(client, texto) {
     .replace(/<!(here|channel|everyone)>/g, '@$1')
     .replace(/<((?:https?|mailto):[^|>]+)\|([^>]+)>/g, '$2 ($1)')
     .replace(/<((?:https?|mailto):[^>]+)>/g, '$1');
+
+  // Slack manda los emojis de dos puntos como texto (:tada:), no como el
+  // simbolo. Los propios del workspace (:sesame:) no tienen equivalente y se
+  // quedan como estan.
+  t = emojify(t);
 
   // Y ahora si, deshacer el escapado de Slack.
   return t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');

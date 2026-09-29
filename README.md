@@ -33,7 +33,7 @@ la conversación cuando el ticket se resuelve.
 
 | Evento en Slack | Qué ocurre en GLPI |
 |---|---|
-| El usuario escribe en el canal | Se añade como seguimiento del ticket |
+| El usuario escribe en el canal | Se añade como seguimiento del ticket, a su nombre, con menciones y emojis traducidos |
 | El usuario edita su mensaje | Se reescribe ese seguimiento |
 | El usuario sube un archivo | Se adjunta al ticket como documento |
 | El usuario pulsa «Sigo con el problema» | El ticket se reabre y se avisa al técnico por mensaje directo |

@@ -543,6 +543,7 @@ const pruebas = [
   ['A &amp; B', 'A & B'],
   ['<#C01|soporte-it>', '#soporte-it'],
   ['<!here>', '@here'],
+  ['ya va :tada:', 'ya va 🎉'],
 ];
 for (const [crudo, esperado] of pruebas) {
   const r = await formatearDesdeSlack(clienteMenciones, crudo);
