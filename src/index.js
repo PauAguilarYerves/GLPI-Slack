@@ -30,10 +30,37 @@ async function etiquetaDe(client, slackUserId) {
   return profile?.user?.real_name || profile?.user?.name || slackUserId;
 }
 
+// Slack -> usuario de GLPI, por correo. Se cachea: no cambia entre mensajes.
+const cacheUsuariosGlpi = new Map();
+
+async function usuarioGlpiDe(client, slackUserId) {
+  if (cacheUsuariosGlpi.has(slackUserId)) return cacheUsuariosGlpi.get(slackUserId);
+
+  const perfil = await client.users.info({ user: slackUserId }).catch(() => null);
+  const correo = perfil?.user?.profile?.email;
+  let usersId = null;
+
+  if (correo) {
+    const ids = await glpi.findUsersByEmail(correo).catch(() => []);
+    if (ids.length > 1) {
+      log.warn(`${correo} tiene ${ids.length} usuarios en GLPI (${ids.join(', ')}): se usa el primero`);
+    }
+    usersId = ids[0] || null;
+  }
+  if (!usersId) log.info(`Sin usuario de GLPI para ${correo || slackUserId}: el seguimiento ira a nombre del puente`);
+
+  cacheUsuariosGlpi.set(slackUserId, usersId);
+  return usersId;
+}
+
 async function pushReplyToGlpi(client, { ticketId, text, slackUserId }) {
-  const label = await etiquetaDe(client, slackUserId);
   const limpio = await formatearDesdeSlack(client, text);
-  const followupId = await glpi.addFollowup(ticketId, slackToGlpiHtml(limpio, label));
+  const usersId = await usuarioGlpiDe(client, slackUserId);
+
+  // Si el seguimiento queda a nombre del usuario, GLPI ya muestra quien es y la
+  // firma sobra. Solo se pone cuando hay que atribuirlo a la cuenta de servicio.
+  const label = usersId ? null : await etiquetaDe(client, slackUserId);
+  const followupId = await glpi.addFollowup(ticketId, slackToGlpiHtml(limpio, label), usersId);
 
   // Clave anti-bucle: marcamos como visto el seguimiento que acabamos de crear
   // para que el sondeo no lo devuelva a Slack.
@@ -121,8 +148,9 @@ async function handleSlackEdit(event, client) {
   if (!texto) return;
 
   try {
-    const label = await etiquetaDe(client, msg.user);
     const limpio = await formatearDesdeSlack(client, texto);
+    const usersId = await usuarioGlpiDe(client, msg.user);
+    const label = usersId ? null : await etiquetaDe(client, msg.user);
     await glpi.updateFollowup(enlace.followup_id, slackToGlpiHtml(limpio, label, true));
     // La edicion si se confirma siempre: es poco frecuente y ahi importa saber
     // que la correccion ha llegado.

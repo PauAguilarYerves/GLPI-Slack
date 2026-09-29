@@ -107,8 +107,13 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
   por `formatearDesdeSlack` antes de `slackToGlpiHtml`, o el usuario acaba viendo codigos.
 - **Los avisos al equipo no miran la lista blanca**, a diferencia de todo lo demas: al equipo
   le interesan todos los tickets, a los usuarios solo el suyo.
-- **Tres capas de anti-bucle** (`seen_followups`, `GLPI_BRIDGE_USER_ID`, `bot_id`). Si tocas el
-  flujo de escritura, comprueba que ninguna se rompe: el síntoma es un ping-pong infinito.
+- **Los seguimientos que vienen de Slack se crean a nombre del usuario real** (`users_id` en el
+  input, que GLPI respeta). Por eso llevan la marca invisible `MARCA_PUENTE` en el contenido:
+  sin ella el sondeo no podria distinguirlos de un mensaje escrito en GLPI y los devolveria al
+  canal. No la quites al tocar `slackToGlpiHtml`.
+- **Cuatro capas de anti-bucle** (`seen_followups`, la marca en el contenido,
+  `GLPI_BRIDGE_USER_ID` para el caso de respaldo, y `bot_id` en Slack). Si tocas el flujo de
+  escritura, comprueba que ninguna se rompe: el sintoma es un ping-pong infinito.
 
 ## Al terminar un cambio
 

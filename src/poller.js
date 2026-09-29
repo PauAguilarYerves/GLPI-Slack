@@ -4,7 +4,7 @@ import { log } from './log.js';
 import * as store from './store.js';
 import { glpi, glpiDateToIso, glpiTicketUrl as ticketUrl } from './glpi.js';
 import { alerta, recuperado, nota } from './alerts.js';
-import { glpiHtmlToSlack, extractGlpiDocIds } from './format.js';
+import { glpiHtmlToSlack, extractGlpiDocIds, esDelPuente } from './format.js';
 import {
   ensureConversation, postToConversation, cleanupConversation, uploadDocuments,
   updateMessage, retirarMensaje, asegurarMiembros, followupBlocks, closureBlocks,
@@ -562,6 +562,7 @@ async function handleNewFollowups(client, ticket, sinceMs) {
 
   const visibles = followups
     .filter((f) => Number(f.is_private) !== 1)                         // notas internas fuera
+    .filter((f) => !esDelPuente(f.content))                            // anti-bucle (marca)
     .filter((f) => Number(f.users_id) !== config.glpi.bridgeUserId);   // anti-bucle (autor)
 
   let conversation = store.getConversationByTicket(ticket.id);

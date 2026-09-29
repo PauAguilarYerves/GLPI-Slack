@@ -88,11 +88,25 @@ export function glpiHtmlToSlack(html) {
  * servicio, asi que hace falta decir quien escribio de verdad, pero en una
  * conversacion de mensajes cortos una cabecera larga ocupa mas que el contenido.
  */
+/**
+ * Marca invisible que identifica los seguimientos creados por el puente.
+ *
+ * Hace falta porque ahora se crean a nombre del usuario real, no de la cuenta
+ * de servicio: sin ella, el sondeo no sabria distinguir un mensaje que acaba de
+ * llegar de Slack de uno escrito en GLPI, y lo devolveria al canal.
+ */
+export const MARCA_PUENTE = '<!-- puente-slack -->';
+
+export function esDelPuente(contenido) {
+  return String(contenido || '').includes('puente-slack');
+}
+
 export function slackToGlpiHtml(text, authorLabel, editado = false) {
   const cuerpo = escapeHtml(text).replace(/\n/g, '<br>');
-  if (!authorLabel) return `<p>${cuerpo}</p>`;
-  const marca = editado ? '· Slack · editado' : '· Slack';
-  return `<p><strong>${escapeHtml(authorLabel)}</strong> <em>${marca}</em><br>${cuerpo}</p>`;
+  const firma = authorLabel
+    ? `<strong>${escapeHtml(authorLabel)}</strong> <em>· Slack${editado ? ' · editado' : ''}</em><br>`
+    : (editado ? '<em>· editado desde Slack</em><br>' : '');
+  return `${MARCA_PUENTE}<p>${firma}${cuerpo}</p>`;
 }
 
 /** Escapa para que el texto del usuario no se interprete como HTML en GLPI. */

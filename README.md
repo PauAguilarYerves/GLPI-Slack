@@ -595,10 +595,13 @@ Todo en SQLite (`data/bridge.sqlite`):
 Sin esto, cada respuesta escrita en GLPI desde Slack vuelve a Slack, que la reescribe en GLPI…
 Tres capas:
 
-1. Al crear un seguimiento desde Slack, su `id` se guarda en `seen_followups` con origen
-   `slack`. El sondeo nunca lo reenvía.
-2. Se descarta todo seguimiento cuyo autor sea `GLPI_BRIDGE_USER_ID`.
-3. En Slack se ignora cualquier evento con `bot_id`.
+1. Al crear un seguimiento desde Slack, su `id` se guarda en `seen_followups`. El sondeo nunca
+   lo reenvía.
+2. Ese seguimiento lleva una **marca invisible** en el contenido. Hace falta porque se crea a
+   nombre del usuario real: sin ella no habría forma de distinguirlo de uno escrito en GLPI.
+3. Se descarta todo seguimiento cuyo autor sea `GLPI_BRIDGE_USER_ID`, que es el caso de
+   respaldo cuando no se pudo atribuir al usuario.
+4. En Slack se ignora cualquier evento con `bot_id`.
 
 ### El cursor
 
@@ -650,8 +653,10 @@ Sube el detalle del log con `LOG_LEVEL=debug`.
   incluyendo los mensajes del usuario.
 - **Los canales archivados siguen contando** en el workspace aunque nadie los vea. Con volumen
   alto, conviene un barrido manual periódico desde la consola de administración.
-- **Autoría en GLPI**: los seguimientos creados por la API se atribuyen a la cuenta de servicio.
-  El puente encabeza cada seguimiento con **Nombre Apellido** *· Slack*.
+- **Autoría en GLPI**: los seguimientos se crean a nombre del usuario real, porque GLPI respeta
+  el `users_id` que se le pasa. Así aparecen con su avatar, su nombre y alineados en su lado de
+  la conversación, igual que un ticket normal. Si su correo de Slack no corresponde con ningún
+  usuario de GLPI, se atribuyen a la cuenta de servicio y se encabezan con su nombre.
 - **Una sola instancia.** SQLite y el cursor no están pensados para dos procesos en paralelo.
   Para alta disponibilidad hay que mover el estado a PostgreSQL y añadir un lock.
 - **Las notas privadas** (`is_private`) nunca salen a Slack. Es deliberado.

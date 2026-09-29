@@ -407,10 +407,13 @@ export class GlpiClient {
   }
 
   /** Crea un seguimiento y devuelve su id (necesario para el anti-bucle). */
-  async addFollowup(ticketId, contentHtml) {
-    const payload = await this.request('POST', '/ITILFollowup', {
-      body: { input: { itemtype: 'Ticket', items_id: Number(ticketId), content: contentHtml } },
-    });
+  async addFollowup(ticketId, contentHtml, usersId = null) {
+    // GLPI respeta users_id si se lo pasamos, asi que el seguimiento queda a
+    // nombre de quien escribio de verdad: con su avatar, su nombre y alineado
+    // en el lado que le toca de la conversacion.
+    const input = { itemtype: 'Ticket', items_id: Number(ticketId), content: contentHtml };
+    if (usersId) input.users_id = Number(usersId);
+    const payload = await this.request('POST', '/ITILFollowup', { body: { input } });
     const created = Array.isArray(payload) ? payload[0] : payload;
     const id = Number(created?.id);
     if (!id) throw new GlpiError('GLPI no devolvio el id del seguimiento', 200, payload);
