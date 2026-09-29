@@ -346,7 +346,32 @@ if (calls.some((c) => c[1] === 'U_MARTA' && c[0] === 'postMessage')) {
   console.error('FALLO: si ya ha contestado, el aviso debe descartarse');
   process.exit(1);
 }
-console.log('  ya contestado: aviso descartado, correcto');
+console.log('  ya contestado desde GLPI: aviso descartado, correcto');
+
+// Y lo mismo si contesta desde el canal de Slack: ahi el seguimiento lo firma
+// la cuenta de servicio, no su usuario de GLPI.
+followups.push({
+  id: 9730, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 5,
+  content: '<p>Otra pregunta mas.</p>', date_creation: glpiNow(70000),
+});
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+await pollOnce(fakeClient);                       // encola el aviso
+followups.push({
+  id: 9740, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 99,
+  content: '<p>Contesto desde Slack.</p>', date_creation: glpiNow(80000),
+});
+store.rememberOutboundMessage({
+  channelId: 'C_TKT42', ts: '1700000998.000100', followupId: 9740,
+  ticketId: 42, slackUserId: 'U_MARTA',
+});
+new bd(process.env.DB_PATH).prepare('UPDATE pending_notices SET due_at = ?').run(new Date(Date.now()-1000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+if (calls.some((c) => c[1] === 'U_MARTA' && c[0] === 'postMessage')) {
+  console.error('FALLO: contestar desde Slack tambien debe descartar el aviso');
+  process.exit(1);
+}
+console.log('  ya contestado desde Slack: aviso descartado, correcto');
 
 console.log('--- PASADA 3d: el tecnico BORRA un seguimiento ya enviado ---');
 // Primero uno nuevo que si llegue a publicarse.

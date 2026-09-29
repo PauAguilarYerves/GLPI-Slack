@@ -290,23 +290,30 @@ async function procesarAvisosPendientes(client) {
       if (!ultimoPendiente) { store.clearPendingNotices(ticketId); continue; }
 
       const tecnico = await glpi.getAssignedTechnician(ticketId);
+      const tecnicoSlackId = tecnico?.email
+        ? await findSlackUserByEmail(client, tecnico.email)
+        : null;
 
       // ¿Ha contestado ya el tecnico? Se compara por id de seguimiento, no por
       // fecha: los ids de GLPI son crecientes, mientras que las fechas van al
       // segundo y una respuesta rapida cae en el mismo segundo que la pregunta.
+      //
+      // Cuenta tanto si contesto desde GLPI —firma su usuario— como desde el
+      // canal de Slack, donde el seguimiento lo firma la cuenta de servicio y
+      // hay que mirar quien lo escribio de verdad.
       const desdeId = Number(ultimoPendiente.id);
-      const yaContestado = Boolean(tecnico?.users_id) && followups.some(
-        (f) => Number(f.users_id) === Number(tecnico.users_id) && Number(f.id) > desdeId,
-      );
+      const yaContestado = followups.some((f) => {
+        if (Number(f.id) <= desdeId) return false;
+        if (tecnico?.users_id && Number(f.users_id) === Number(tecnico.users_id)) return true;
+        return Boolean(tecnicoSlackId)
+          && store.getOutboundAuthor(Number(f.id)) === tecnicoSlackId;
+      });
       if (yaContestado) {
         store.clearPendingNotices(ticketId);
         log.info(`Ticket ${ticketId}: ya contestado, aviso descartado`);
         continue;
       }
 
-      const tecnicoSlackId = tecnico?.email
-        ? await findSlackUserByEmail(client, tecnico.email)
-        : null;
       const autor = Number(ultimoPendiente.users_id) === config.glpi.bridgeUserId
         ? (await glpi.getRequesters(ticketId, ticket).catch(() => []))[0]?.name || 'El solicitante'
         : await authorNameOf(Number(ultimoPendiente.users_id));
