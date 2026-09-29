@@ -651,7 +651,7 @@ Sube el detalle del log con `LOG_LEVEL=debug`.
 - **Los canales archivados siguen contando** en el workspace aunque nadie los vea. Con volumen
   alto, conviene un barrido manual periódico desde la consola de administración.
 - **Autoría en GLPI**: los seguimientos creados por la API se atribuyen a la cuenta de servicio.
-  El puente antepone *«Respuesta recibida desde Slack — Nombre Apellido»* al contenido.
+  El puente encabeza cada seguimiento con **Nombre Apellido** *· Slack*.
 - **Una sola instancia.** SQLite y el cursor no están pensados para dos procesos en paralelo.
   Para alta disponibilidad hay que mover el estado a PostgreSQL y añadir un lock.
 - **Las notas privadas** (`is_private`) nunca salen a Slack. Es deliberado.

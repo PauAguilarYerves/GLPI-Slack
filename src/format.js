@@ -81,17 +81,26 @@ export function glpiHtmlToSlack(html) {
   return escapeSlack(t).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** Texto de Slack -> HTML simple para el campo content de GLPI. */
-export function slackToGlpiHtml(text, authorLabel) {
-  const escaped = String(text || '')
+/**
+ * Texto de Slack -> HTML simple para el campo content de GLPI.
+ *
+ * La firma va compacta y en una sola linea: el seguimiento lo crea la cuenta de
+ * servicio, asi que hace falta decir quien escribio de verdad, pero en una
+ * conversacion de mensajes cortos una cabecera larga ocupa mas que el contenido.
+ */
+export function slackToGlpiHtml(text, authorLabel, editado = false) {
+  const cuerpo = escapeHtml(text).replace(/\n/g, '<br>');
+  if (!authorLabel) return `<p>${cuerpo}</p>`;
+  const marca = editado ? '· Slack · editado' : '· Slack';
+  return `<p><strong>${escapeHtml(authorLabel)}</strong> <em>${marca}</em><br>${cuerpo}</p>`;
+}
+
+/** Escapa para que el texto del usuario no se interprete como HTML en GLPI. */
+function escapeHtml(text) {
+  return String(text || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\n/g, '<br>');
-  const header = authorLabel
-    ? `<p><em>Respuesta recibida desde Slack — ${authorLabel}</em></p>`
-    : '';
-  return `${header}<p>${escaped}</p>`;
+    .replace(/>/g, '&gt;');
 }
 
 export function truncate(s, max = 2900) {

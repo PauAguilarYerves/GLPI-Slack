@@ -123,7 +123,7 @@ async function handleSlackEdit(event, client) {
   try {
     const label = await etiquetaDe(client, msg.user);
     const limpio = await formatearDesdeSlack(client, texto);
-    await glpi.updateFollowup(enlace.followup_id, slackToGlpiHtml(limpio, `${label} (editado)`));
+    await glpi.updateFollowup(enlace.followup_id, slackToGlpiHtml(limpio, label, true));
     // La edicion si se confirma siempre: es poco frecuente y ahi importa saber
     // que la correccion ha llegado.
     await client.reactions
