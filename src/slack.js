@@ -69,6 +69,42 @@ export async function resolverDestinatarios(client, correos) {
   return ids;
 }
 
+const cacheNombres = new Map();
+
+async function nombreDe(client, userId) {
+  if (!cacheNombres.has(userId)) {
+    const info = await client.users.info({ user: userId }).catch(() => null);
+    cacheNombres.set(userId, info?.user?.real_name || info?.user?.name || userId);
+  }
+  return cacheNombres.get(userId);
+}
+
+/**
+ * Traduce a texto legible lo que Slack manda en crudo: las menciones llegan
+ * como <@U03MM5MJDJM> y los enlaces como <url|texto>. Ademas Slack escapa &,
+ * < y > en el texto del usuario, asi que hay que deshacerlo antes de volver a
+ * escaparlo como HTML para GLPI, o un "&" acaba viendose como "&amp;".
+ */
+export async function formatearDesdeSlack(client, texto) {
+  let t = String(texto || '');
+
+  // Menciones a personas: hay que preguntarle a Slack quien es cada una.
+  for (const [, id] of [...t.matchAll(/<@([UW][A-Z0-9]+)>/g)]) {
+    t = t.replaceAll(`<@${id}>`, `@${await nombreDe(client, id)}`);
+  }
+
+  t = t
+    .replace(/<#[CG][A-Z0-9]+\|([^>]+)>/g, '#$1')          // canal con nombre
+    .replace(/<#([CG][A-Z0-9]+)>/g, '#canal')               // canal sin nombre
+    .replace(/<!subteam\^[A-Z0-9]+\|?@?([^>]*)>/g, (m, g) => `@${g || 'grupo'}`)
+    .replace(/<!(here|channel|everyone)>/g, '@$1')
+    .replace(/<((?:https?|mailto):[^|>]+)\|([^>]+)>/g, '$2 ($1)')
+    .replace(/<((?:https?|mailto):[^>]+)>/g, '$1');
+
+  // Y ahora si, deshacer el escapado de Slack.
+  return t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
 export async function findSlackUserByEmail(client, email) {
   if (!email) return null;
   try {

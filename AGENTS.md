@@ -102,6 +102,9 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
 - **Para saber si algo es posterior a otra cosa, compara ids, no fechas.** GLPI guarda las
   fechas al segundo, asi que una respuesta rapida cae en el mismo segundo que la pregunta.
   Los ids de seguimiento son crecientes y no tienen ese problema.
+- **El texto de Slack no es texto plano.** Las menciones llegan como `<@U123>`, los enlaces
+  como `<url|texto>`, y `&`, `<` y `>` vienen escapados. Todo lo que vaya de Slack a GLPI pasa
+  por `formatearDesdeSlack` antes de `slackToGlpiHtml`, o el usuario acaba viendo codigos.
 - **Los avisos al equipo no miran la lista blanca**, a diferencia de todo lo demas: al equipo
   le interesan todos los tickets, a los usuarios solo el suyo.
 - **Tres capas de anti-bucle** (`seen_followups`, `GLPI_BRIDGE_USER_ID`, `bot_id`). Si tocas el

@@ -532,6 +532,27 @@ if (acciones.indexOf('kick') > acciones.indexOf('archive')) {
   console.error('FALLO: se expulso despues de archivar; en un canal archivado ya no se puede');
   process.exit(1);
 }
+console.log('--- PASADA 7b: lo que Slack manda en crudo llega legible a GLPI ---');
+const { formatearDesdeSlack } = await import('../src/slack.js');
+const clienteMenciones = {
+  users: { info: async ({ user }) => ({ user: { real_name: user === 'U03MM5' ? 'Ricardo Serrano' : 'Otro' } }) },
+};
+const pruebas = [
+  ['<@U03MM5>', '@Ricardo Serrano'],
+  ['<https://glpi.test|el ticket>', 'el ticket (https://glpi.test)'],
+  ['A &amp; B', 'A & B'],
+  ['<#C01|soporte-it>', '#soporte-it'],
+  ['<!here>', '@here'],
+];
+for (const [crudo, esperado] of pruebas) {
+  const r = await formatearDesdeSlack(clienteMenciones, crudo);
+  if (r !== esperado) {
+    console.error(`FALLO: "${crudo}" -> "${r}", se esperaba "${esperado}"`);
+    process.exit(1);
+  }
+}
+console.log('  menciones, enlaces y escapados: ' + pruebas.length + ' casos correctos');
+
 console.log('--- PASADA 8: un parpadeo de red no debe avisar, un corte si ---');
 const fallo = new Error('fetch failed');
 

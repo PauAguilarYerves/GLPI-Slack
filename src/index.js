@@ -9,7 +9,7 @@ import { configurarAlertas, alerta } from './alerts.js';
 import {
   REPLY_ACTION_ID, REPLY_VIEW_ID, OPEN_GLPI_ACTION_ID, REOPEN_ACTION_ID,
   downloadSlackFile, postToConversation, updateMessage, reopenedBlocks, closureBlocks,
-  avisarSoporte, avisoReaperturaBlocks, findSlackUserByEmail, COLORES,
+  avisarSoporte, avisoReaperturaBlocks, findSlackUserByEmail, formatearDesdeSlack, COLORES,
 } from './slack.js';
 
 const { App } = pkg;
@@ -32,7 +32,8 @@ async function etiquetaDe(client, slackUserId) {
 
 async function pushReplyToGlpi(client, { ticketId, text, slackUserId }) {
   const label = await etiquetaDe(client, slackUserId);
-  const followupId = await glpi.addFollowup(ticketId, slackToGlpiHtml(text, label));
+  const limpio = await formatearDesdeSlack(client, text);
+  const followupId = await glpi.addFollowup(ticketId, slackToGlpiHtml(limpio, label));
 
   // Clave anti-bucle: marcamos como visto el seguimiento que acabamos de crear
   // para que el sondeo no lo devuelva a Slack.
@@ -121,7 +122,8 @@ async function handleSlackEdit(event, client) {
 
   try {
     const label = await etiquetaDe(client, msg.user);
-    await glpi.updateFollowup(enlace.followup_id, slackToGlpiHtml(texto, `${label} (editado)`));
+    const limpio = await formatearDesdeSlack(client, texto);
+    await glpi.updateFollowup(enlace.followup_id, slackToGlpiHtml(limpio, `${label} (editado)`));
     // La edicion si se confirma siempre: es poco frecuente y ahi importa saber
     // que la correccion ha llegado.
     await client.reactions
