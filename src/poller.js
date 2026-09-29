@@ -718,6 +718,8 @@ export async function pollOnce(client) {
       if (conversation && !conversation.cleaned_at && conversation.cleanup_at) {
         store.cancelCleanup(ticket.id);
         log.info(`Ticket ${ticket.id} reabierto antes de la limpieza: cancelada`);
+        // Y de paso, quien se hubiera salido del canal dandolo por cerrado.
+        await asegurarMiembros(client, store.getConversationByTicket(ticket.id));
       }
 
       await anunciarTicketNuevo(client, ticket, sinceMs);

@@ -29,7 +29,7 @@ la conversación cuando el ticket se resuelve.
 | El técnico lo marca como privado, o lo borra | Se retira de Slack, con sus adjuntos. Si vuelve a ser visible, reaparece |
 | El ticket se resuelve o cierra | Se publica la solución, con un botón para reabrir, y el canal desaparece del Slack del usuario |
 | El ticket se elimina | Se avisa y se cierra la conversación, aunque GLPI ya no lo devuelva |
-| El ticket se reabre | Se estrena canal `-r2`; el anterior queda archivado |
+| El ticket se reabre | Si el canal ya se cerró, se estrena uno `-r2`; si aún vivía, vuelve a entrar quien se hubiera salido |
 
 | Evento en Slack | Qué ocurre en GLPI |
 |---|---|

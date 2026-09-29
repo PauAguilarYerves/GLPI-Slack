@@ -9,7 +9,8 @@ import { configurarAlertas, alerta } from './alerts.js';
 import {
   REPLY_ACTION_ID, REPLY_VIEW_ID, OPEN_GLPI_ACTION_ID, REOPEN_ACTION_ID,
   downloadSlackFile, postToConversation, updateMessage, reopenedBlocks, closureBlocks,
-  avisarSoporte, avisoReaperturaBlocks, findSlackUserByEmail, formatearDesdeSlack, COLORES,
+  avisarSoporte, avisoReaperturaBlocks, findSlackUserByEmail, formatearDesdeSlack,
+  asegurarMiembros, COLORES,
 } from './slack.js';
 
 const { App } = pkg;
@@ -88,6 +89,11 @@ async function reabrirTicket(client, conversation, slackUserId, mensaje) {
   }
 
   store.cancelCleanup(conversation.ticket_id);
+
+  // El ticket vuelve a estar vivo: quien se hubiera salido del canal mientras
+  // estaba dado por cerrado tiene que volver a entrar.
+  await asegurarMiembros(client, store.getConversationByTicket(conversation.ticket_id))
+    .catch((err) => log.warn(`No se pudo recomponer el canal del ${conversation.ticket_id}: ${err.message}`));
 
   const quien = await etiquetaDe(client, slackUserId);
   await postToConversation(client, store.getConversationByTicket(conversation.ticket_id), {

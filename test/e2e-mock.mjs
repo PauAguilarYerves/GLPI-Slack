@@ -424,6 +424,23 @@ if (creado[1] !== 'ticket-no-tengo-acceso-a-la-vpn-77') {
   console.error('FALLO: nombre de canal inesperado'); process.exit(1);
 }
 
+console.log('--- PASADA 4c: reapertura dentro del margen: vuelve a entrar quien se salio ---');
+// Se revive la conversacion y se deja con la limpieza programada, que es el
+// estado del margen de gracia: cerrado pero el canal todavia en pie.
+store.reopenConversation(42);
+store.markCleanupDue(42, new Date(Date.now() + 3600_000).toISOString());
+fueraDelCanal.add('U_MARTA');
+ticketStatus = 2;                                   // reabierto en GLPI
+calls.splice(0);
+await pollOnce(fakeClient);
+if (!calls.some((c) => c[0] === 'invite' && c[2] === 'U_MARTA')) {
+  console.error('FALLO: al reabrirse deberia volver a entrar quien se habia salido');
+  process.exit(1);
+}
+console.log('  reincorporado al reabrirse el ticket');
+// Se deja como estaba para que la pasada siguiente encuentre su escenario.
+store.markCleaned(42);
+
 console.log('--- PASADA 5: el ticket se REABRE ---');
 extras.clear();
 ticketStatus = 2;
