@@ -342,7 +342,7 @@ compañeros → vaciar la lista.
 | `CHANNEL_INCLUDE_TITLE` | `false` | Añade el título del ticket al nombre |
 | `REPLY_MODE` | `inline` | `inline` (escribir en el canal) o `modal` (botón + ventana; no deja ningún mensaje humano en el canal) |
 | `MESSAGE_COLORS` | `true` | Barra de color lateral por tipo de mensaje |
-| `ACK_REACTIONS` | `true` | Marca con ✅ cada mensaje que llega a GLPI y con ✏️ cada edición. Los errores se avisan igual si está desactivado |
+| `ACK_REACTIONS` | `true` | Marca con ✅ cada mensaje que llega a GLPI. Las ediciones se marcan con ✏️ siempre, y los errores se avisan igual |
 | `INVITE_TECHNICIAN` | `false` | Mete al técnico asignado en el canal del ticket, también si se le asigna después de crearlo |
 | `REINVITE_ON_REPLY` | `true` | Si el solicitante se salió del canal y el técnico responde, se le vuelve a invitar |
 | `HISTORY_MESSAGES` | `3` | Mensajes previos que se resumen al abrir el canal de un ticket que ya existía |
