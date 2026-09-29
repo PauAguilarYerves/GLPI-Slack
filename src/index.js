@@ -206,6 +206,7 @@ app.event('message', async ({ event, client }) => {
       ts: event.ts,
       followupId,
       ticketId: conversation.ticket_id,
+      slackUserId: event.user,
     });
     await client.reactions
       .add({ channel: event.channel, timestamp: event.ts, name: 'white_check_mark' })

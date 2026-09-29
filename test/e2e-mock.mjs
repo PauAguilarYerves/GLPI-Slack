@@ -184,6 +184,7 @@ calls.splice(0);
 await pollOnce(fakeClient);
 console.log('  llamadas a Slack:', calls.length, calls.map(c=>c[0]));
 
+
 console.log('--- PASADA 3b: el tecnico EDITA el seguimiento ---');
 followups[0].content = '<p>Corrijo: <b>NO</b> reinicies el equipo todavia.</p>';
 calls.splice(0);
@@ -278,6 +279,27 @@ if (process.env.INVITE_TECHNICIAN === 'true' && !tecnicoInvitado) {
   process.exit(1);
 }
 console.log('  tecnico en el canal:', tecnicoInvitado ? tecnicoInvitado[2] : '(desactivado)');
+
+// Ahora Marta, que es la tecnica asignada, escribe desde Slack en ese ticket.
+// El seguimiento lo firma la cuenta de servicio, asi que sin el arreglo se
+// avisaria a si misma.
+const idPropio = 9600;
+followups.push({
+  id: idPropio, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 99,
+  content: '<p>Escrito por Marta desde Slack.</p>', date_creation: glpiNow(1600),
+});
+store.rememberOutboundMessage({
+  channelId: 'C_TKT42', ts: '1700000999.000100', followupId: idPropio,
+  ticketId: 42, slackUserId: 'U_MARTA',
+});
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+if (calls.some((c) => c[1] === 'U_MARTA' && c[0] === 'postMessage')) {
+  console.error('FALLO: se ha avisado a la tecnica de un mensaje que escribio ella misma');
+  process.exit(1);
+}
+console.log('  no se avisa a nadie de sus propios mensajes: correcto');
 
 console.log('--- PASADA 3d: el tecnico BORRA un seguimiento ya enviado ---');
 // Primero uno nuevo que si llegue a publicarse.

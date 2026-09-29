@@ -226,8 +226,11 @@ async function avisarTecnicoDeRespuestas(client, ticket, followups, sinceMs) {
   for (const f of nuevos) {
     store.markTechNotified(Number(f.id), ticket.id);
 
-    // Su propia respuesta no se la contamos a el.
+    // Su propia respuesta no se la contamos a el. Ojo: los seguimientos que
+    // llegan desde Slack los firma la cuenta de servicio, asi que hay que mirar
+    // ademas quien los escribio de verdad, o se avisa a la gente de si misma.
     if (tecnico?.users_id && Number(f.users_id) === Number(tecnico.users_id)) continue;
+    if (tecnicoSlackId && store.getOutboundAuthor(Number(f.id)) === tecnicoSlackId) continue;
 
     const autor = Number(f.users_id) === config.glpi.bridgeUserId
       ? (await glpi.getRequesters(ticket.id, ticket).catch(() => []))[0]?.name || 'El solicitante'

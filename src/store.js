@@ -114,6 +114,13 @@ if (!columnas.includes('closure_ts')) {
   db.exec('ALTER TABLE conversations ADD COLUMN closure_ts TEXT');
 }
 
+// Saber quien escribio de verdad un seguimiento que llego desde Slack: lo firma
+// la cuenta de servicio, asi que sin esto no hay forma de no avisarle a el mismo.
+const colSalientes = db.prepare('PRAGMA table_info(outbound_messages)').all().map((c) => c.name);
+if (colSalientes.length > 0 && !colSalientes.includes('slack_user_id')) {
+  db.exec('ALTER TABLE outbound_messages ADD COLUMN slack_user_id TEXT');
+}
+
 const colFicheros = db.prepare('PRAGMA table_info(bot_files)').all().map((c) => c.name);
 if (colFicheros.length > 0 && !colFicheros.includes('followup_id')) {
   db.exec('ALTER TABLE bot_files ADD COLUMN followup_id INTEGER');
@@ -296,12 +303,18 @@ export function updateFollowupHash(followupId, contentHash) {
     .run(contentHash, followupId);
 }
 
-export function rememberOutboundMessage({ channelId, ts, followupId, ticketId }) {
+export function rememberOutboundMessage({ channelId, ts, followupId, ticketId, slackUserId }) {
   db.prepare(`
-    INSERT INTO outbound_messages (channel_id, ts, followup_id, ticket_id)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO outbound_messages (channel_id, ts, followup_id, ticket_id, slack_user_id)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(channel_id, ts) DO UPDATE SET followup_id = excluded.followup_id
-  `).run(channelId, ts, followupId, ticketId);
+  `).run(channelId, ts, followupId, ticketId, slackUserId || null);
+}
+
+/** Quien escribio en Slack el seguimiento, si es que vino de alli. */
+export function getOutboundAuthor(followupId) {
+  return db.prepare('SELECT slack_user_id FROM outbound_messages WHERE followup_id = ?')
+    .get(followupId)?.slack_user_id || null;
 }
 export function getOutboundMessage(channelId, ts) {
   return db.prepare('SELECT * FROM outbound_messages WHERE channel_id = ? AND ts = ?')
