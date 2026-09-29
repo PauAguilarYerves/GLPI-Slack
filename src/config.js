@@ -76,6 +76,9 @@ export const config = {
   replyMode: (process.env.REPLY_MODE || 'inline').toLowerCase(),
   // Barra de color a la izquierda del mensaje segun el tipo. A false, mensajes planos.
   messageColors: bool(process.env.MESSAGE_COLORS, true),
+  // Marcar con un emoji cada mensaje que llega a GLPI. Confirma que se recibio,
+  // pero con uso diario cansa: si falla algo, el aviso de error sigue saliendo.
+  ackReactions: bool(process.env.ACK_REACTIONS, true),
   // CLEANUP_DELAY_SECONDS manda si esta puesto; si no, se usan los minutos.
   // Si el usuario escribe durante el margen de gracia posterior al cierre, se
   // reabre el ticket en GLPI en vez de dejar que el canal desaparezca.

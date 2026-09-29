@@ -122,9 +122,11 @@ async function handleSlackEdit(event, client) {
   try {
     const label = await etiquetaDe(client, msg.user);
     await glpi.updateFollowup(enlace.followup_id, slackToGlpiHtml(texto, `${label} (editado)`));
-    await client.reactions
-      .add({ channel: event.channel, timestamp: msg.ts, name: 'pencil2' })
-      .catch(() => {});
+    if (config.ackReactions) {
+      await client.reactions
+        .add({ channel: event.channel, timestamp: msg.ts, name: 'pencil2' })
+        .catch(() => {});
+    }
     log.info(`Slack -> GLPI: seguimiento ${enlace.followup_id} actualizado tras editarse en Slack`);
   } catch (err) {
     log.error(`No se pudo actualizar el seguimiento ${enlace.followup_id}:`, err.message, err.body ?? '');
@@ -208,9 +210,11 @@ app.event('message', async ({ event, client }) => {
       ticketId: conversation.ticket_id,
       slackUserId: event.user,
     });
-    await client.reactions
-      .add({ channel: event.channel, timestamp: event.ts, name: 'white_check_mark' })
-      .catch(() => {});
+    if (config.ackReactions) {
+      await client.reactions
+        .add({ channel: event.channel, timestamp: event.ts, name: 'white_check_mark' })
+        .catch(() => {});
+    }
 
     if (fallidos.length) {
       await ephemeral(client, event.channel, event.user,
