@@ -630,6 +630,7 @@ Tres capas:
 | `invalid_auth` | Token caducado o mal copiado | `./set-secret.sh SLACK_BOT_TOKEN` |
 | `restricted_action` al expulsar | El workspace restringe quitar miembros de canales privados | *Workspace settings → Permissions* |
 | **Los adjuntos llegan a GLPI vacíos** (0 bytes) | GLPI no puede escribir en su directorio de documentos | `chown -R www-data:www-data` sobre el directorio `files` |
+| **«No tiene permisos» al adjuntar** un archivo a un ticket | El documento se creó en otra entidad distinta a la del ticket | El puente lo crea en la entidad del ticket; si ves esto, actualiza |
 | `ERROR_GLPI_ADD: Fallo al mover el archivo` | Lo mismo | Igual |
 | **Se ven etiquetas `<p>` en los mensajes** | El HTML de GLPI llega escapado y hay que decodificar antes de limpiar | Ya resuelto en `src/format.js`; si reaparece, revisa el orden de `decodeEntities` |
 | **Se abren canales de tickets antiguos** | El cursor viene de una parada larga | `npm run cursor:reset`, o `MAX_CATCHUP_HOURS` |

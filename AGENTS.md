@@ -67,6 +67,11 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
   (`document.send.php?docid=N`) y el resto en `Document_Item`. Hay que mirar en los dos.
 - **Al subir un documento a GLPI**, no metas `itemtype`/`items_id` en el `uploadManifest`: GLPI
   responde 201 y no guarda el fichero. Créalo suelto y vincúlalo con `Document_Item`.
+- **El documento tiene que nacer en la entidad del ticket.** Si no, `Document_Item` responde
+  "No tiene permisos": GLPI no vincula documentos de otra entidad. No se nota mientras todos
+  los tickets estan en la raiz.
+- **El `uploadManifest` va envuelto en `{ input: ... }`.** Sin el envoltorio GLPI acepta la
+  peticion y no crea nada util.
 - **Una cuenta de GLPI con varios perfiles** abre sesión con el predeterminado, que suele ser
   Self-Service y no ve ningún ticket. Por eso existe `GLPI_PROFILE_ID`.
 - **El `kick` va antes del `archive`**: en un canal archivado ya no se puede expulsar a nadie.

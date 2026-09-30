@@ -320,8 +320,12 @@ export class GlpiClient {
    * uploadManifest, GLPI entra por otro camino y falla con "Fallo al mover el
    * archivo". Creamos el documento suelto y lo vinculamos despues.
    */
-  async uploadDocument(ticketId, fichero) {
-    const documentId = await this.createDocument(fichero);
+  async uploadDocument(ticketId, fichero, entitiesId = null) {
+    // El documento tiene que nacer en la entidad del ticket: GLPI no permite
+    // vincular un documento de otra entidad, y desde que la cuenta de servicio
+    // es recursiva los tickets ya no estan todos en la raiz.
+    const entidad = entitiesId ?? (await this.getTicket(ticketId).catch(() => null))?.entities_id;
+    const documentId = await this.createDocument(fichero, entidad);
 
     // GLPI puede responder 201 y aun asi no haber guardado el fichero: deja la
     // ficha con filepath vacio y un adjunto que no se puede abrir. Lo
@@ -336,7 +340,13 @@ export class GlpiClient {
       );
     }
 
-    await this.linkDocumentToTicket(documentId, ticketId);
+    try {
+      await this.linkDocumentToTicket(documentId, ticketId);
+    } catch (err) {
+      // Un documento sin vincular no lo ve nadie y ensucia GLPI: se retira.
+      await this.request('DELETE', `/Document/${documentId}`).catch(() => {});
+      throw err;
+    }
     return documentId;
   }
 
@@ -358,12 +368,12 @@ export class GlpiClient {
    * JSON y el binario en filename[0]. No hay que fijar Content-Type a mano:
    * fetch pone el boundary.
    */
-  async createDocument({ buffer, filename, mime }) {
+  async createDocument({ buffer, filename, mime }, entitiesId = null) {
     if (!this.sessionToken) await this.initSession();
     const form = new FormData();
-    form.append('uploadManifest', JSON.stringify({
-      input: { name: filename, _filename: [filename] },
-    }));
+    const input = { name: filename, _filename: [filename] };
+    if (entitiesId !== null && entitiesId !== undefined) input.entities_id = Number(entitiesId);
+    form.append('uploadManifest', JSON.stringify({ input }));
     form.append('filename[0]', new Blob([buffer], { type: mime || 'application/octet-stream' }), filename);
 
     const res = await fetch(`${this.baseUrl}/Document`, {
