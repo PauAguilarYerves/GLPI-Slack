@@ -343,6 +343,7 @@ compañeros → vaciar la lista.
 | `REPLY_MODE` | `inline` | `inline` (escribir en el canal) o `modal` (botón + ventana; no deja ningún mensaje humano en el canal) |
 | `MESSAGE_COLORS` | `true` | Barra de color lateral por tipo de mensaje |
 | `ACK_REACTIONS` | `true` | Marca con ✅ cada mensaje que llega a GLPI. Las ediciones se marcan con ✏️ siempre, y los errores se avisan igual |
+| `RECOVER_MISSED_MESSAGES` | `true` | Al arrancar, relee los canales para recuperar lo escrito mientras el puente estuvo caído |
 | `INVITE_TECHNICIAN` | `false` | Mete al técnico asignado en el canal del ticket, también si se le asigna después de crearlo |
 | `REINVITE_ON_REPLY` | `true` | Si el solicitante se salió del canal y el técnico responde, se le vuelve a invitar |
 | `HISTORY_MESSAGES` | `3` | Mensajes previos que se resumen al abrir el canal de un ticket que ya existía |
@@ -612,6 +613,10 @@ Tres capas:
   posterior al cursor, así que moverlo tras un error de red dejaría ese mensaje fuera para
   siempre. Repetir el ciclo es inofensivo.
 - Para descartar lo acumulado tras una parada larga: `npm run cursor:reset`.
+- **El cursor solo protege la dirección GLPI → Slack.** Los mensajes de Slack llegan por una
+  conexión permanente, y si el puente está caído Slack no tiene a quién entregarlos: no hay
+  reintento ni cola, se pierden. Por eso al arrancar se releen los canales abiertos desde el
+  último mensaje conocido y se recupera lo que falte.
 - Para recuperar algo que se perdió, se puede retroceder:
   `node src/tools/reset-cursor.js 2026-09-24T10:39:00Z`. Comprueba antes cuántos tickets se
   han movido en ese intervalo, porque todos se reprocesan.

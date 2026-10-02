@@ -171,14 +171,13 @@ async function handleSlackEdit(event, client) {
   }
 }
 
-app.event('message', async ({ event, client }) => {
-  if (event.subtype === 'message_changed') {
-    await handleSlackEdit(event, client);
-    return;
-  }
-  if (event.bot_id || !event.user) return;
-  if (!SUBTIPOS_VALIDOS.has(event.subtype)) return;
-
+/**
+ * Procesa un mensaje del canal de un ticket: lo lleva a GLPI con sus adjuntos.
+ *
+ * Esta aparte del manejador de eventos porque tambien se usa al arrancar, para
+ * recuperar lo que se escribio mientras el puente estuvo caido.
+ */
+async function procesarMensajeDeSlack(client, event) {
   const ficheros = event.files || [];
   const texto = (event.text || '').trim();
   // Un archivo sin comentario tampoco puede pasar de largo en silencio.
@@ -263,7 +262,74 @@ app.event('message', async ({ event, client }) => {
     await ephemeral(client, event.channel, event.user,
       'No he podido registrar tu respuesta en GLPI. Inténtalo de nuevo en unos minutos.');
   }
+}
+
+app.event('message', async ({ event, client }) => {
+  if (event.subtype === 'message_changed') {
+    await handleSlackEdit(event, client);
+    return;
+  }
+  if (event.bot_id || !event.user) return;
+  if (!SUBTIPOS_VALIDOS.has(event.subtype)) return;
+
+  // Se apunta siempre, aunque el mensaje acabe descartandose: marca hasta donde
+  // hemos leido este canal para poder recuperar desde ahi tras una caida.
+  store.setKv(`ultimo_ts:${event.channel}`, event.ts);
+
+  await procesarMensajeDeSlack(client, event);
 });
+
+/**
+ * Los mensajes de Slack llegan por una conexion permanente: si el puente esta
+ * caido, Slack no tiene a quien entregarlos y se pierden, sin reintento ni cola.
+ * Al arrancar se relee cada canal abierto desde el ultimo mensaje conocido.
+ */
+async function recuperarMensajesPerdidos(client) {
+  if (!config.recoverMissedMessages) return;
+
+  const botUserId = (await client.auth.test()).user_id;
+  let recuperados = 0;
+
+  for (const conversation of store.listActiveConversations()) {
+    const desde = store.getKv(`ultimo_ts:${conversation.channel_id}`)
+      || String(new Date(conversation.created_at).getTime() / 1000);
+
+    let historial;
+    try {
+      historial = await client.conversations.history({
+        channel: conversation.channel_id, oldest: desde, limit: 200, inclusive: false,
+      });
+    } catch (err) {
+      log.warn(`No se pudo releer ${conversation.channel_id}: ${err?.data?.error || err.message}`);
+      continue;
+    }
+
+    const pendientes = (historial.messages || [])
+      .filter((m) => m.user && m.user !== botUserId && !m.bot_id)
+      .filter((m) => SUBTIPOS_VALIDOS.has(m.subtype))
+      .filter((m) => !store.getOutboundMessage(conversation.channel_id, m.ts))
+      .sort((a, b) => Number(a.ts) - Number(b.ts));
+
+    for (const m of pendientes) {
+      log.info(
+        `Recuperando mensaje perdido del ticket ${conversation.ticket_id} `
+        + `(${new Date(Number(m.ts) * 1000).toLocaleString('es-ES')})`,
+      );
+      await procesarMensajeDeSlack(client, { ...m, channel: conversation.channel_id });
+      store.setKv(`ultimo_ts:${conversation.channel_id}`, m.ts);
+      recuperados += 1;
+    }
+  }
+
+  if (recuperados > 0) {
+    log.warn(`Recuperados ${recuperados} mensaje(s) que llegaron con el puente caido`);
+    await alerta(
+      'mensajes-perdidos',
+      `Recuperados ${recuperados} mensajes escritos mientras el puente estaba caido`,
+      'Llegaron a Slack con el puente parado y ya estan en sus tickets, con retraso.',
+    );
+  }
+}
 
 // ---------------------------------------------------------------
 // Respuesta desde ventana emergente (REPLY_MODE=modal)
@@ -463,6 +529,10 @@ async function main() {
     `Puente GLPI<->Slack activo (conversacion=${config.mode}, respuesta=${config.replyMode}, ` +
     `limpieza=${config.cleanupMode}, socket=${config.slack.socketMode})`,
   );
+  await recuperarMensajesPerdidos(app.client).catch(
+    (err) => log.error('Fallo recuperando mensajes perdidos:', err.message),
+  );
+
   pollTimer = startPolling(app.client);
   watchdogTimer = arrancarWatchdog();
 }

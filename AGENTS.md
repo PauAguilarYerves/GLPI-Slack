@@ -110,6 +110,9 @@ En Docker es lo mismo cambiando los dos últimos por `docker compose up -d --bui
 - **El texto de Slack no es texto plano.** Las menciones llegan como `<@U123>`, los enlaces
   como `<url|texto>`, y `&`, `<` y `>` vienen escapados. Todo lo que vaya de Slack a GLPI pasa
   por `formatearDesdeSlack` antes de `slackToGlpiHtml`, o el usuario acaba viendo codigos.
+- **Socket Mode no reintenta.** Si el puente esta caido, los mensajes de Slack no se entregan
+  nunca: no hay cola. Por eso se guarda `ultimo_ts:<canal>` y al arrancar se relee el historial.
+  El cursor de GLPI no cubre esta direccion.
 - **Los avisos al equipo no miran la lista blanca**, a diferencia de todo lo demas: al equipo
   le interesan todos los tickets, a los usuarios solo el suyo.
 - **Los seguimientos que vienen de Slack se crean a nombre del usuario real** (`users_id` en el

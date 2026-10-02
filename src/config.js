@@ -80,6 +80,9 @@ export const config = {
   // pero con uso diario cansa: si falla algo, el aviso de error sigue saliendo.
   // Las ediciones se confirman siempre, que son mucho menos frecuentes.
   ackReactions: bool(process.env.ACK_REACTIONS, true),
+  // Al arrancar, releer los canales para recuperar lo que se escribio mientras
+  // el puente estuvo caido: Slack no reintenta la entrega por Socket Mode.
+  recoverMissedMessages: bool(process.env.RECOVER_MISSED_MESSAGES, true),
   // CLEANUP_DELAY_SECONDS manda si esta puesto; si no, se usan los minutos.
   // Si el usuario escribe durante el margen de gracia posterior al cierre, se
   // reabre el ticket en GLPI en vez de dejar que el canal desaparezca.
