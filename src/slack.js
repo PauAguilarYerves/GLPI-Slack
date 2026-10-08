@@ -238,7 +238,7 @@ export async function ensureConversation(client, { ticket, requesters, technicia
     store.rememberRequester(ticket.id, `1:${r.users_id ? r.users_id : `email:${r.email}`}`);
   }
   if (technician?.users_id && technician.slackUserId) {
-    store.rememberRequester(ticket.id, `2:${technician.users_id}`);
+    store.rememberRequester(ticket.id, `2:${technician.users_id}`, technician.slackUserId);
   }
 
   store.saveConversation({
@@ -385,6 +385,33 @@ async function deleteBotMessages(client, conversation) {
  * deja el canal accesible para quien fue miembro.
  * Debe hacerse ANTES de archivar: en un canal archivado ya no se puede expulsar.
  */
+/**
+ * Retira a una sola persona del canal. A diferencia de kickMembers, que vacia
+ * el canal al cerrar el ticket, esto se usa cuando alguien deja de ser actor
+ * del ticket en GLPI y ya no le corresponde ver la conversacion.
+ */
+export async function retirarMiembro(client, channelId, slackUserId) {
+  try {
+    await client.conversations.kick({ channel: channelId, user: slackUserId });
+    return true;
+  } catch (err) {
+    const code = err?.data?.error;
+    // Ya no estaba: el resultado es el que buscabamos igualmente.
+    if (['not_in_channel', 'user_not_found', 'cant_kick_self'].includes(code)) return true;
+    if (code === 'restricted_action') {
+      await alerta(
+        'permisos-expulsar',
+        'No se puede retirar a quien deja de estar asignado',
+        'El workspace restringe quien puede retirar miembros de canales privados, asi que '
+        + 'los tecnicos siguen viendo tickets que ya no llevan. Se ajusta en Settings & '
+        + 'administration -> Workspace settings -> Permissions.',
+      );
+      return false;
+    }
+    throw err;
+  }
+}
+
 async function kickMembers(client, conversation) {
   const botUserId = await getBotUserId(client);
   let cursor;

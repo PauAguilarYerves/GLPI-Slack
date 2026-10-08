@@ -115,6 +115,10 @@ export const config = {
   // recuento y el enlace a GLPI.
   historyMessages: int(process.env.HISTORY_MESSAGES, 3),
   inviteTechnician: bool(process.env.INVITE_TECHNICIAN, false),
+  // La otra cara de inviteTechnician: si a alguien le quitan la asignacion del
+  // ticket en GLPI, se le retira tambien del canal. Solo afecta a quien metio
+  // el puente por ser actor del ticket; a quien entro por otra via, no.
+  removeUnassigned: bool(process.env.REMOVE_UNASSIGNED, false),
   // Si alguien se sale del canal de su ticket y el tecnico responde, se le
   // vuelve a meter: si no, la respuesta no la lee nadie.
   reinviteOnReply: bool(process.env.REINVITE_ON_REPLY, true),

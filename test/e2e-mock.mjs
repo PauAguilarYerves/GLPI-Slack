@@ -15,6 +15,7 @@ const extras = new Map();
 // Dos solicitantes (type 1). El tecnico se asigna mas adelante, como en la
 // realidad: un ticket recien abierto casi nunca lo tiene.
 const actoresDel42 = [{ users_id: 5, type: 1 }, { users_id: 6, type: 1 }];
+let falloActores = false;
 const createdFollowups = [];
 let followups = [{
   id: 9001, itemtype: 'Ticket', items_id: 42, is_private: 0, users_id: 7,
@@ -53,7 +54,11 @@ globalThis.fetch = async (url, opts = {}) => {
   if (/^\/ITILFollowup\/\d+\/Document_Item$/.test(p)) return json([]);
   if (p === '/Ticket/42/ITILSolution') return json([{ id: 555, content: '<p>Cambiada la fuente de alimentaci&oacute;n.</p>' }]);
   // Dos solicitantes (type 1) y un tecnico asignado (type 2).
-  if (p === '/Ticket/42/Ticket_User') return json(actoresDel42);
+  if (p === '/Ticket/42/Ticket_User') {
+    // Simula una caida de GLPI justo en la consulta de actores.
+    if (falloActores) throw new Error('fetch failed');
+    return json(actoresDel42);
+  }
   if (p === '/User/5') return json({ id: 5, name: 'pau', firstname: 'Pau', realname: 'Pérez' });
   if (p === '/User/7') return json({ id: 7, name: 'tecnico', firstname: 'Marta', realname: 'Gil' });
   if (p === '/User/6') return json({ id: 6, name: 'lucia', firstname: 'Lucía', realname: 'Soler' });
@@ -300,6 +305,55 @@ if (calls.some((c) => c[1] === 'U_MARTA' && c[0] === 'postMessage')) {
   process.exit(1);
 }
 console.log('  no se avisa a nadie de sus propios mensajes: correcto');
+
+console.log('--- PASADA 3i: le quitan la asignacion y sale del canal ---');
+// Marta deja de estar asignada: el ticket ya no es asunto suyo.
+const sinMarta = actoresDel42.findIndex((a) => Number(a.users_id) === 7 && Number(a.type) === 2);
+actoresDel42.splice(sinMarta, 1);
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+const expulsada = calls.find((c) => c[0] === 'kick' && c[2] === 'U_MARTA');
+if (!expulsada) {
+  console.error('FALLO: al quitarle la asignacion, el tecnico deberia salir del canal');
+  process.exit(1);
+}
+if (store.isInvited('C_TKT42', 'U_MARTA')) {
+  console.error('FALLO: sigue como invitada, asegurarMiembros la volveria a meter');
+  process.exit(1);
+}
+// El solicitante no se toca aunque cambie el reparto de tecnicos.
+if (calls.some((c) => c[0] === 'kick' && c[2] === 'U_PAU')) {
+  console.error('FALLO: se ha expulsado al solicitante de su propio ticket');
+  process.exit(1);
+}
+console.log('  tecnico sin asignacion fuera, solicitante intacto: correcto');
+
+// Y no debe repetirse en la siguiente pasada: ya no consta como actor.
+calls.splice(0);
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+await pollOnce(fakeClient);
+if (calls.some((c) => c[0] === 'kick' && c[2] === 'U_MARTA')) {
+  console.error('FALLO: se intenta expulsar dos veces a la misma persona');
+  process.exit(1);
+}
+console.log('  no se repite la expulsion: correcto');
+
+// Si GLPI falla, la lista de actores viene vacia: no se puede vaciar el canal.
+actoresDel42.push({ users_id: 7, type: 2 });
+fueraDelCanal.add('U_MARTA');
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+await pollOnce(fakeClient);          // vuelve a entrar
+falloActores = true;
+store.setCursor(new Date(Date.now() - 60000).toISOString());
+calls.splice(0);
+await pollOnce(fakeClient);
+falloActores = false;
+if (calls.some((c) => c[0] === 'kick')) {
+  console.error('FALLO: un error de GLPI no puede vaciar el canal de gente');
+  process.exit(1);
+}
+console.log('  un fallo de GLPI no expulsa a nadie: correcto');
 
 console.log('--- PASADA 3h: el aviso espera, y se descarta si ya han contestado ---');
 followups.push({

@@ -24,6 +24,7 @@ la conversación cuando el ticket se resuelve.
 | Se crea un ticket | Se abre un canal privado con sus solicitantes y se publica la solicitud |
 | Se añade un solicitante después | Entra al canal en el siguiente sondeo |
 | Se asigna un técnico | Entra al canal, si `INVITE_TECHNICIAN` está activo |
+| Se le quita la asignación | Sale del canal, si `REMOVE_UNASSIGNED` está activo |
 | El técnico añade un seguimiento | Llega al canal, con sus adjuntos |
 | El técnico edita un seguimiento | Se reescribe el mensaje, marcado como editado |
 | El técnico lo marca como privado, o lo borra | Se retira de Slack, con sus adjuntos. Si vuelve a ser visible, reaparece |
@@ -345,6 +346,7 @@ compañeros → vaciar la lista.
 | `ACK_REACTIONS` | `true` | Marca con ✅ cada mensaje que llega a GLPI. Las ediciones se marcan con ✏️ siempre, y los errores se avisan igual |
 | `RECOVER_MISSED_MESSAGES` | `true` | Al arrancar, relee los canales para recuperar lo escrito mientras el puente estuvo caído |
 | `INVITE_TECHNICIAN` | `false` | Mete al técnico asignado en el canal del ticket, también si se le asigna después de crearlo |
+| `REMOVE_UNASSIGNED` | `false` | Saca del canal al técnico al que le quitan la asignación. Solo a quien metió el puente por estar asignado; a quien se invitó a mano, no. Necesita `INVITE_TECHNICIAN` |
 | `REINVITE_ON_REPLY` | `true` | Si el solicitante se salió del canal y el técnico responde, se le vuelve a invitar |
 | `HISTORY_MESSAGES` | `3` | Mensajes previos que se resumen al abrir el canal de un ticket que ya existía |
 

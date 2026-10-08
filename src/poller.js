@@ -10,7 +10,7 @@ import {
   updateMessage, retirarMensaje, asegurarMiembros, followupBlocks, closureBlocks,
   ticketOpenedBlocks, historyBlocks, deletedTicketBlocks, notificationText,
   nuevoTicketBlocks, respuestaEnTicketBlocks, avisarSoporte, resolverDestinatarios,
-  findSlackUserByEmail, COLORES,
+  findSlackUserByEmail, retirarMiembro, COLORES,
 } from './slack.js';
 
 /**
@@ -131,7 +131,13 @@ async function sincronizarActores(client, ticket, conversation) {
   // Los tecnicos casi nunca estan asignados cuando se crea el ticket, asi que
   // no basta con invitarlos al abrir el canal: hay que mirarlo en cada pasada.
   const tipos = config.inviteTechnician ? [1, 2] : [1];
-  const actores = await glpi.getActorKeys(ticket.id, tipos).catch(() => []);
+  // Un fallo de GLPI no puede confundirse con "ya no hay actores": devolver una
+  // lista vacia aqui vaciaria el canal de gente que si deberia estar.
+  const actores = await glpi.getActorKeys(ticket.id, tipos).catch(() => null);
+  if (!actores) return;
+
+  await retirarActoresRetirados(client, ticket, conversation, actores);
+
   const nuevos = actores.filter((a) => !store.isRequesterKnown(ticket.id, a.clave));
   if (nuevos.length === 0) return;
 
@@ -170,7 +176,62 @@ async function sincronizarActores(client, ticket, conversation) {
         if (!['already_in_channel', 'cant_invite_self'].includes(err?.data?.error)) throw err;
       });
     store.rememberInvited(conversation.channel_id, slackId);
+    // Guardar la equivalencia permite retirarlo si luego le quitan el ticket.
+    store.rememberRequester(ticket.id, actor.clave, slackId);
     log.info(`Ticket ${ticket.id}: ${persona.email} entra al canal como ${papel}`);
+  }
+}
+
+/**
+ * La cuenta de Slack de un actor que ya no esta en el ticket. Solo hace falta
+ * para los tickets anteriores a la columna slack_user_id, donde no se guardo.
+ */
+async function resolverSlackDeActor(client, actorKey) {
+  const quien = actorKey.replace(/^\d+:/, '');
+  const email = quien.startsWith('email:')
+    ? quien.slice('email:'.length)
+    : (await glpi.resolverUsuario(Number(quien)).catch(() => null))?.email;
+  if (!email) return null;
+  return findSlackUserByEmail(client, email);
+}
+
+/**
+ * Si a un tecnico le quitan la asignacion del ticket, sale tambien del canal:
+ * deja de ser asunto suyo y deja de verlo.
+ *
+ * Solo se retira a quien metio el puente por estar asignado. A quien entro por
+ * otra via -- invitado a mano para echar un cable -- no se le toca, porque el
+ * puente nunca registro para el una asignacion que perder.
+ */
+async function retirarActoresRetirados(client, ticket, conversation, actores) {
+  if (!config.removeUnassigned || !config.inviteTechnician) return;
+
+  const vigentes = new Set(actores.map((a) => a.clave));
+  const conocidos = store.listKnownActors(ticket.id);
+  // Los solicitantes se quedan: el ticket sigue siendo suyo aunque les cambien
+  // el rol, y echarlos de su propia conversacion seria peor que el problema.
+  const retirados = conocidos.filter(
+    (a) => a.actor_key.startsWith('2:') && !vigentes.has(a.actor_key),
+  );
+  if (retirados.length === 0) return;
+
+  // Quien sigue siendo actor por otro lado (solicitante ademas de tecnico, o
+  // reasignado con otra clave) conserva el acceso.
+  const sigueSiendoActor = new Set(
+    conocidos.filter((a) => vigentes.has(a.actor_key) && a.slack_user_id)
+      .map((a) => a.slack_user_id),
+  );
+
+  for (const actor of retirados) {
+    store.forgetRequester(ticket.id, actor.actor_key);
+
+    const slackId = actor.slack_user_id
+      || await resolverSlackDeActor(client, actor.actor_key).catch(() => null);
+    if (!slackId || sigueSiendoActor.has(slackId)) continue;
+
+    if (!await retirarMiembro(client, conversation.channel_id, slackId)) continue;
+    store.forgetInvited(conversation.channel_id, slackId);
+    log.info(`Ticket ${ticket.id}: ${slackId} sale del canal, ya no esta asignado`);
   }
 }
 

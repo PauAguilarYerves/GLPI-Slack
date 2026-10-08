@@ -135,6 +135,14 @@ if (colFicheros.length > 0 && !colFicheros.includes('followup_id')) {
   db.exec('ALTER TABLE bot_files ADD COLUMN followup_id INTEGER');
 }
 
+// Para poder retirar a quien deja de estar asignado hay que saber que cuenta de
+// Slack corresponde a cada actor. En los tickets anteriores a esta columna se
+// queda a NULL y se resuelve sobre la marcha.
+const colActores = db.prepare('PRAGMA table_info(ticket_requesters)').all().map((c) => c.name);
+if (colActores.length > 0 && !colActores.includes('slack_user_id')) {
+  db.exec('ALTER TABLE ticket_requesters ADD COLUMN slack_user_id TEXT');
+}
+
 // ---------- cursor ----------
 export function getCursor() {
   const row = db.prepare('SELECT v FROM kv WHERE k = ?').get('cursor');
@@ -346,9 +354,31 @@ export function isRequesterKnown(ticketId, actorKey) {
   return db.prepare('SELECT 1 AS hit FROM ticket_requesters WHERE ticket_id = ? AND actor_key = ?')
     .get(ticketId, String(actorKey)) !== undefined;
 }
-export function rememberRequester(ticketId, actorKey) {
-  db.prepare('INSERT OR IGNORE INTO ticket_requesters (ticket_id, actor_key) VALUES (?, ?)')
+export function rememberRequester(ticketId, actorKey, slackUserId = null) {
+  db.prepare(
+    'INSERT INTO ticket_requesters (ticket_id, actor_key, slack_user_id) VALUES (?, ?, ?) '
+    + 'ON CONFLICT(ticket_id, actor_key) DO UPDATE SET '
+    + 'slack_user_id = COALESCE(excluded.slack_user_id, slack_user_id)',
+  ).run(ticketId, String(actorKey), slackUserId ? String(slackUserId) : null);
+}
+
+/** Los actores que el puente ya ha procesado, con su cuenta de Slack si la supo. */
+export function listKnownActors(ticketId) {
+  return db.prepare('SELECT actor_key, slack_user_id FROM ticket_requesters WHERE ticket_id = ?')
+    .all(ticketId);
+}
+export function forgetRequester(ticketId, actorKey) {
+  db.prepare('DELETE FROM ticket_requesters WHERE ticket_id = ? AND actor_key = ?')
     .run(ticketId, String(actorKey));
+}
+
+/**
+ * Olvidar que invitamos a alguien. Hay que hacerlo al expulsarlo: si no,
+ * asegurarMiembros lo volveria a meter en la siguiente pasada.
+ */
+export function forgetInvited(channelId, userId) {
+  db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?')
+    .run(channelId, userId);
 }
 
 // ---------- avisos al equipo de soporte ----------

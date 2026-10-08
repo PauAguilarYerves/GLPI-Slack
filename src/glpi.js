@@ -184,10 +184,18 @@ export class GlpiClient {
   }
 
   /** Actores del ticket: type 1 = solicitante, 2 = asignado, 3 = observador. */
-  async getTicketUsers(ticketId) {
-    const data = await this.request('GET', `/Ticket/${ticketId}/Ticket_User`, {
+  /**
+   * Los actores del ticket. Por defecto un fallo devuelve lista vacia, que para
+   * la mayoria de usos solo significa "no invites a nadie todavia".
+   *
+   * Con tolerante=false el error sube: quien decide EXPULSAR a alguien no puede
+   * confundir "GLPI no contesta" con "ya no hay nadie asignado".
+   */
+  async getTicketUsers(ticketId, { tolerante = true } = {}) {
+    const pide = this.request('GET', `/Ticket/${ticketId}/Ticket_User`, {
       query: new URLSearchParams({ range: '0-99' }).toString(),
-    }).catch(() => []);
+    });
+    const data = tolerante ? await pide.catch(() => []) : await pide;
     return Array.isArray(data) ? data : [];
   }
 
@@ -259,7 +267,8 @@ export class GlpiClient {
    * tipos: 1 = solicitante, 2 = asignado, 3 = observador.
    */
   async getActorKeys(ticketId, tipos = [1]) {
-    const actors = await this.getTicketUsers(ticketId);
+    // Sin red de seguridad a proposito: el que llama distingue el fallo.
+    const actors = await this.getTicketUsers(ticketId, { tolerante: false });
     return actors
       .filter((a) => tipos.includes(Number(a.type)))
       .filter((a) => Number(a.users_id) || a.alternative_email)
